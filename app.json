@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "Lostit",
-    "slug": "lostit",
-    "version": "1.0.0",
+    "name": "MealTrack",
+    "slug": "mealtrack",
+    "version": "2.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "plugins": [
@@ -18,10 +18,10 @@
       ]
     ],
     "android": {
-      "package": "com.example.lostit"
+      "package": "com.iamhashir.mealtrack"
     },
     "ios": {
-      "bundleIdentifier": "com.example.lostit"
+      "bundleIdentifier": "com.iamhashir.mealtrack"
     }
   }
 }
