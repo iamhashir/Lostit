@@ -22,6 +22,12 @@ export type PortionDepthReading = {
   depthHeight: number;
   tracking: boolean;
   timestamp: number;
+  plateDepthMm: number;
+  estimatedVolumeMl: number;
+  estimatedHeightMm: number;
+  foodPixelRatio: number;
+  planeResidualMm: number;
+  estimateConfidence: number;
 };
 
 export type PortionScannerStatusEvent = {
