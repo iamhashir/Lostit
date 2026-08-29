@@ -8,9 +8,9 @@ import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.os.SystemClock
 import android.view.Surface
+import android.view.View
 import android.view.ViewGroup
 import androidx.core.content.ContextCompat
-import com.facebook.react.bridge.LifecycleEventListener
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.Session
@@ -27,7 +27,7 @@ import javax.microedition.khronos.opengles.GL10
 class PortionDepthView(
   context: Context,
   appContext: AppContext
-) : ExpoView(context, appContext), GLSurfaceView.Renderer, LifecycleEventListener {
+) : ExpoView(context, appContext), GLSurfaceView.Renderer {
   private val onDepthUpdate by EventDispatcher()
   private val onScannerStatus by EventDispatcher()
 
@@ -60,43 +60,37 @@ class PortionDepthView(
   private var displayGeometryDirty = true
 
   private var cameraTextureSession: Session? = null
-  private var lifecycleRegistered = false
   private var lastDepthDispatchMs = 0L
   private var lastStatusKey: String? = null
 
   init {
     setBackgroundColor(0xFF050707.toInt())
     addView(glSurfaceView)
-    registerLifecycleListener()
   }
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
-    registerLifecycleListener()
-    startSessionIfPossible()
     glSurfaceView.onResume()
+    startSessionIfPossible()
   }
 
   override fun onDetachedFromWindow() {
     glSurfaceView.onPause()
     closeSession()
-    unregisterLifecycleListener()
     super.onDetachedFromWindow()
   }
 
-  override fun onHostResume() {
+  override fun onWindowVisibilityChanged(visibility: Int) {
+    super.onWindowVisibilityChanged(visibility)
     if (!isAttachedToWindow) return
-    startSessionIfPossible()
-    glSurfaceView.onResume()
-  }
 
-  override fun onHostPause() {
-    glSurfaceView.onPause()
-    pauseSession()
-  }
-
-  override fun onHostDestroy() {
-    closeSession()
+    if (visibility == View.VISIBLE) {
+      glSurfaceView.onResume()
+      startSessionIfPossible()
+    } else {
+      glSurfaceView.onPause()
+      pauseSession()
+    }
   }
 
   override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
@@ -254,7 +248,7 @@ class PortionDepthView(
     try {
       activeSession.pause()
     } catch (_: Throwable) {
-      // Session may already be paused while the React activity is stopping.
+      // Session may already be paused while the view is leaving the window.
     } finally {
       sessionResumed = false
     }
@@ -266,18 +260,6 @@ class PortionDepthView(
     session = null
     cameraTextureSession = null
     lastStatusKey = null
-  }
-
-  private fun registerLifecycleListener() {
-    if (lifecycleRegistered) return
-    appContext.reactContext?.addLifecycleEventListener(this)
-    lifecycleRegistered = true
-  }
-
-  private fun unregisterLifecycleListener() {
-    if (!lifecycleRegistered) return
-    appContext.reactContext?.removeLifecycleEventListener(this)
-    lifecycleRegistered = false
   }
 
   private fun currentDisplayRotation(): Int {
