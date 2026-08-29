@@ -1,10 +1,17 @@
 name: Build Android Release APK
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: android-release-main
+  cancel-in-progress: true
 
 jobs:
   build-apk:
@@ -29,10 +36,17 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Type-check app
+        run: npm run typecheck
+
       - name: Generate optimized Android project
         env:
           CI: '1'
         run: npx expo prebuild --platform android --clean
+
+      - name: Verify release optimization config
+        run: |
+          grep -E 'android.enable(Minify|ShrinkResources)InReleaseBuilds|android.enableBundleCompression' android/gradle.properties
 
       - name: Build ARM64 release APK
         working-directory: android
@@ -52,3 +66,14 @@ jobs:
           path: MealTrack-arm64-release.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish latest APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --cleanup-tag --yes 2>/dev/null || true
+          gh release create latest MealTrack-arm64-release.apk \
+            --title "Latest MealTrack Android APK" \
+            --notes "Optimized ARM64 release build from commit ${GITHUB_SHA}." \
+            --prerelease \
+            --target "${GITHUB_SHA}"
