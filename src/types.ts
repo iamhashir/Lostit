@@ -1,36 +1,27 @@
-export type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'high';
-export type SexForEstimate = 'male' | 'female';
+export type RoutineStyle = 'morning' | 'evening' | 'split' | 'flexible';
 
 export type Profile = {
-  age: number;
-  heightCm: number;
-  weightKg: number;
-  goalWeightKg: number;
-  sexForEstimate: SexForEstimate;
-  activity: ActivityLevel;
-  trainingDays: number;
-  equipment: string;
-  foods: string;
+  name: string;
+  primaryGoal: string;
+  successDefinition: string;
+  motivation: string;
+  dailyMinutes: number;
+  focusDays: number;
+  routineStyle: RoutineStyle;
+  obstacles: string;
 };
 
-export type MacroTargets = {
-  maintenance: number;
-  calories: number;
-  protein: number;
-  carbs: number;
-  fat: number;
-};
-
-export type WeightEntry = {
+export type ProgressEntry = {
   day: number;
-  weightKg: number;
+  score: number;
+  note?: string;
 };
 
 export type AppScreen =
   | 'home'
-  | 'nutrition'
-  | 'meals'
-  | 'training'
+  | 'plan'
+  | 'routine'
+  | 'focus'
   | 'habits'
   | 'tracking'
   | 'roadmap';
