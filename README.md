@@ -1,31 +1,34 @@
-# FatLoss 90 — React Native / Expo MVP
+# Lostit — 90-Day Focus System
 
-A dark, green-accent React Native app based on the seven fat-loss planning ideas in the supplied screenshots:
+Lostit is a React Native / Expo app for turning one important goal into a clear 90-day plan.
 
-1. Master 90-day plan
-2. Calories and macros
-3. Practical meal plan
-4. Strength-training plan
-5. Daily behavior system
-6. Progress tracking
-7. 90-day execution roadmap
+It is intentionally general-purpose. The app is built around focus, routines, habits, consistency, reflection, and progress — not any specific health, fitness, or lifestyle outcome.
+
+## Core flow
+
+1. Define one primary goal
+2. Decide what success looks like
+3. Build a weekly plan
+4. Create repeatable daily routines
+5. Track a small set of habits
+6. Log progress and review each week
+7. Follow a 90-day roadmap and adjust when needed
 
 ## Included
 
 - Expo + React Native + TypeScript
-- Onboarding for age, height, weight, goal, activity, training days, equipment, and preferred foods
-- Mifflin-St Jeor-based maintenance estimate
-- Moderate starting calorie deficit
-- Protein / carbohydrate / fat targets
-- Meal structure and swaps
-- Strength program and cardio guidance
+- Simple onboarding for goal, motivation, available time, preferred routine, and common obstacles
+- Goal breakdown into weekly actions
+- Daily focus-session structure
+- Routine templates
 - Habit checklist
-- Weight logging and simple trend logic
+- Progress score logging
 - Weekly review questions
 - 90-day phased roadmap
+- Dark interface with green accents
 - No API key stored in the mobile app
 
-## Run it
+## Run locally
 
 Requires Node.js 22.13+ for Expo SDK 57.
 
@@ -34,20 +37,23 @@ npm install
 npx expo start
 ```
 
-Then open the project in Expo Go or an Android/iOS simulator.
+Open the project with Expo Go or an Android/iOS simulator.
 
-## Important implementation note
+## Architecture
 
-This MVP generates plans locally with deterministic rules. If you want AI-personalized meal plans, training plans, weekly reviews, or chat coaching, put the AI call behind a secure backend or serverless function. Do **not** ship an OpenAI API key inside the React Native bundle.
-
-A production version should also add:
+The current MVP works locally with deterministic planning rules and React state. A production version can add:
 
 - authentication
-- persistent storage / cloud sync
-- progress photos
-- waist / steps / sleep tracking
-- push reminders
-- clinician-safety flows where appropriate
-- backend-generated AI plans with structured JSON output
-- subscriptions if this will be commercial
-- proper analytics, crash reporting, and privacy disclosures
+- persistent local storage
+- cloud sync
+- notifications
+- goal history
+- custom habit templates
+- analytics and crash reporting
+- AI-generated plans through a secure backend
+
+If AI features are added, keep provider credentials on the server. Do not place private API keys in the React Native bundle.
+
+## Product direction
+
+Lostit should stay outcome-agnostic: the user chooses the goal, and the app supplies the structure for planning, consistency, reviews, and course correction.
