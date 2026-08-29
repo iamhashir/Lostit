@@ -89,5 +89,9 @@ class PortionScannerModule : Module() {
         }
       }
     }
+
+    View(PortionDepthView::class) {
+      Events("onDepthUpdate", "onScannerStatus")
+    }
   }
 }

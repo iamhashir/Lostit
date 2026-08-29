@@ -27,19 +27,6 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Integrate portion scanner entry
-        run: node scripts/integrate-portion-scanner.mjs
-
-      - name: Persist portion scanner integration
-        run: |
-          if ! git diff --quiet -- App.tsx; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add App.tsx
-            git commit -m "Integrate ARCore portion scanner entry"
-            git push
-          fi
-
       - name: Set up Java
         uses: actions/setup-java@v5
         with:
@@ -61,10 +48,11 @@ jobs:
         run: |
           grep -E 'android.enable(Minify|ShrinkResources)InReleaseBuilds|android.enableBundleCompression' android/gradle.properties
 
-      - name: Verify ARCore module autolinking
+      - name: Verify ARCore depth module autolinking
         run: |
-          test -f android/app/src/main/AndroidManifest.xml
           grep -R "PortionScannerModule" android modules/portion-scanner >/dev/null
+          grep -R "PortionDepthView" android modules/portion-scanner >/dev/null
+          grep -R "com.google.ar.core" android/app/src/main/AndroidManifest.xml modules/portion-scanner >/dev/null
 
       - name: Build ARM64 release APK
         working-directory: android
@@ -92,6 +80,6 @@ jobs:
           gh release delete latest --cleanup-tag --yes 2>/dev/null || true
           gh release create latest MealTrack-arm64-release.apk \
             --title "Latest MealTrack Android APK" \
-            --notes "Optimized ARM64 release build from commit ${GITHUB_SHA}. ARCore portion-scanner foundation included." \
+            --notes "Optimized ARM64 release build from commit ${GITHUB_SHA}. Includes the live ARCore Depth camera calibration prototype." \
             --prerelease \
             --target "${GITHUB_SHA}"
