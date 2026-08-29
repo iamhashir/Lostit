@@ -1,59 +1,56 @@
-# Lostit — 90-Day Focus System
+# MealTrack
 
-Lostit is a React Native / Expo app for turning one important goal into a clear 90-day plan.
+MealTrack is a local-first React Native / Expo meal logger.
 
-It is intentionally general-purpose. The app is built around focus, routines, habits, consistency, reflection, and progress — not any specific health, fitness, or lifestyle outcome.
+The app has one job: **log what you eat and calculate calories and nutrients without AI.**
 
-## Core flow
+## What it does
 
-1. Define one primary goal
-2. Decide what success looks like
-3. Build a weekly plan
-4. Create repeatable daily routines
-5. Track a small set of habits
-6. Log progress and review each week
-7. Follow a 90-day roadmap and adjust when needed
+- Add a meal at any time
+- Search a built-in food database
+- Enter the amount eaten in grams
+- Combine multiple foods into one meal
+- Calculate calories instantly
+- Calculate protein, carbohydrates, fat, fiber, sugar, and sodium
+- Show daily nutrition totals
+- Keep a meal history
+- Create custom foods from package nutrition labels
+- Save meals and custom foods locally on the device
 
-## Included
+## No AI and no nutrition API
 
-- Expo + React Native + TypeScript
-- Simple onboarding for goal, motivation, available time, preferred routine, and common obstacles
-- Goal breakdown into weekly actions
-- Daily focus-session structure
-- Routine templates
-- Habit checklist
-- Progress score logging
-- Weekly review questions
-- 90-day phased roadmap
-- Dark interface with green accents
-- No API key stored in the mobile app
+There is no OpenAI integration, chatbot, image recognition, or AI estimation.
+
+Nutrition is deterministic:
+
+```text
+food nutrient value per 100 g × grams eaten / 100
+```
+
+The built-in database contains generic values for common foods. Brand-specific foods can differ, so packaged foods should be entered as a custom food using the package label.
+
+## Local storage
+
+Meal history and custom foods are persisted with `@react-native-async-storage/async-storage`. No account or cloud connection is required for the core app.
+
+## Technology
+
+- Expo SDK 57
+- React Native
+- TypeScript
+- AsyncStorage
 
 ## Run locally
-
-Requires Node.js 22.13+ for Expo SDK 57.
 
 ```bash
 npm install
 npx expo start
 ```
 
-Open the project with Expo Go or an Android/iOS simulator.
+## Android release build
 
-## Architecture
+The repository includes a GitHub Actions workflow that produces an optimized ARM64 release APK. Release builds use code minification, resource shrinking, and JavaScript bundle compression through `expo-build-properties`.
 
-The current MVP works locally with deterministic planning rules and React state. A production version can add:
+## Product scope
 
-- authentication
-- persistent local storage
-- cloud sync
-- notifications
-- goal history
-- custom habit templates
-- analytics and crash reporting
-- AI-generated plans through a secure backend
-
-If AI features are added, keep provider credentials on the server. Do not place private API keys in the React Native bundle.
-
-## Product direction
-
-Lostit should stay outcome-agnostic: the user chooses the goal, and the app supplies the structure for planning, consistency, reviews, and course correction.
+MealTrack is a food and nutrient logging tool. It does not prescribe diets, set body-weight goals, generate meal plans, or provide medical advice.
