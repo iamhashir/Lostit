@@ -23,11 +23,20 @@ export type PortionDepthReading = {
   tracking: boolean;
   timestamp: number;
   plateDepthMm: number;
+  baseDepthMm: number;
+  rawVolumeMl: number;
   estimatedVolumeMl: number;
   estimatedHeightMm: number;
   foodPixelRatio: number;
+  objectPixelRatio: number;
   planeResidualMm: number;
   estimateConfidence: number;
+  stability: number;
+  sampleWindow: number;
+  autofocusEnabled: boolean;
+  distanceOk: boolean;
+  componentTouchesGuide: boolean;
+  focalLengthPx: number;
 };
 
 export type PortionScannerStatusEvent = {
