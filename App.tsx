@@ -1,11 +1,25 @@
+import 'react-native-gesture-handler';
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createBottomTabNavigator, type BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { DarkTheme, NavigationContainer } from '@react-navigation/native';
+import {
+  ChevronLeft,
+  Clock3,
+  Home,
+  LibraryBig,
+  Plus,
+  Search,
+  Trash2,
+  X,
+  type LucideIcon
+} from 'lucide-react-native';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -13,8 +27,20 @@ import {
   TextInput,
   View
 } from 'react-native';
-
-type Screen = 'today' | 'add' | 'history' | 'foods';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import Animated, {
+  interpolate,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming
+} from 'react-native-reanimated';
+import {
+  initialWindowMetrics,
+  SafeAreaProvider,
+  SafeAreaView,
+  useSafeAreaInsets
+} from 'react-native-safe-area-context';
 
 type Nutrition = {
   calories: number;
@@ -47,17 +73,40 @@ type Meal = {
   items: MealItem[];
 };
 
+type RootTabParamList = {
+  Today: undefined;
+  AddMeal: undefined;
+  Foods: undefined;
+  History: undefined;
+};
+
+const Tab = createBottomTabNavigator<RootTabParamList>();
+
 const theme = {
-  bg: '#07090A',
-  surface: '#13191B',
-  surface2: '#1B2326',
-  border: '#344044',
-  text: '#F4F7F7',
-  muted: '#9FAAAF',
-  green: '#18C58F',
-  greenSoft: '#073E31',
-  danger: '#FF7A7A',
-  yellow: '#F3C969'
+  bg: '#080A0A',
+  surface: '#121616',
+  surface2: '#181D1D',
+  surface3: '#202626',
+  text: '#F5F7F5',
+  muted: '#929C99',
+  muted2: '#68726F',
+  green: '#36D399',
+  greenDark: '#0A2E23',
+  line: 'rgba(255,255,255,0.07)',
+  danger: '#FF7A7A'
+};
+
+const navigationTheme = {
+  ...DarkTheme,
+  colors: {
+    ...DarkTheme.colors,
+    primary: theme.green,
+    background: theme.bg,
+    card: theme.surface,
+    text: theme.text,
+    border: theme.line,
+    notification: theme.green
+  }
 };
 
 const MEALS_KEY = 'mealtrack.meals.v2';
@@ -73,7 +122,6 @@ const n = (
   sodium: number
 ): Nutrition => ({ calories, protein, carbs, fat, fiber, sugar, sodium });
 
-// Generic values per 100 g. Packaged foods vary by brand; users can add exact label values as custom foods.
 const BUILT_IN_FOODS: Food[] = [
   { id: 'chicken-breast', name: 'Chicken breast, cooked', category: 'Protein', nutrients: n(165, 31, 0, 3.6, 0, 0, 74), source: 'built-in' },
   { id: 'chicken-thigh', name: 'Chicken thigh, cooked', category: 'Protein', nutrients: n(209, 26, 0, 10.9, 0, 0, 84), source: 'built-in' },
@@ -186,7 +234,19 @@ function numberOrZero(value: string) {
 }
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>('today');
+  return (
+    <GestureHandlerRootView style={styles.root}>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <StatusBar barStyle="light-content" backgroundColor={theme.bg} />
+        <NavigationContainer theme={navigationTheme}>
+          <MealTrackTabs />
+        </NavigationContainer>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
+  );
+}
+
+function MealTrackTabs() {
   const [meals, setMeals] = useState<Meal[]>([]);
   const [customFoods, setCustomFoods] = useState<Food[]>([]);
   const [loading, setLoading] = useState(true);
@@ -215,7 +275,6 @@ export default function App() {
       void AsyncStorage.setItem(MEALS_KEY, JSON.stringify(next));
       return next;
     });
-    setScreen('today');
   };
 
   const deleteMeal = (mealId: string) => {
@@ -238,77 +297,264 @@ export default function App() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <StatusBar barStyle="light-content" backgroundColor={theme.bg} />
+      <SafeAreaView style={styles.loadingSafe} edges={['top', 'bottom']}>
         <View style={styles.loadingWrap}>
-          <Text style={styles.brand}>MEALTRACK</Text>
-          <Text style={styles.loadingText}>Loading your food log…</Text>
+          <View style={styles.loadingMark}>
+            <LibraryBig size={22} color={theme.green} strokeWidth={2.2} />
+          </View>
+          <Text style={styles.loadingTitle}>MealTrack</Text>
+          <Text style={styles.loadingText}>Loading your nutrition log</Text>
         </View>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="light-content" backgroundColor={theme.bg} />
-      <View style={styles.page}>
-        {screen === 'today' && <TodayScreen meals={meals} onAdd={() => setScreen('add')} />}
-        {screen === 'add' && <AddMealScreen foods={allFoods} onSave={addMeal} />}
-        {screen === 'history' && <HistoryScreen meals={meals} onDelete={deleteMeal} />}
-        {screen === 'foods' && <FoodsScreen foods={allFoods} onAddCustom={addCustomFood} />}
+    <Tab.Navigator
+      initialRouteName="Today"
+      tabBar={(props) => <PremiumTabBar {...props} />}
+      screenOptions={{
+        headerShown: false,
+        sceneStyle: { backgroundColor: theme.bg },
+        animation: 'shift'
+      }}
+    >
+      <Tab.Screen name="Today">
+        {({ navigation }) => (
+          <TodayScreen meals={meals} onHistory={() => navigation.navigate('History')} />
+        )}
+      </Tab.Screen>
+      <Tab.Screen name="AddMeal">
+        {({ navigation }) => (
+          <AddMealScreen
+            foods={allFoods}
+            onSave={(meal) => {
+              addMeal(meal);
+              navigation.navigate('Today');
+            }}
+          />
+        )}
+      </Tab.Screen>
+      <Tab.Screen name="Foods">
+        {() => <FoodsScreen foods={allFoods} onAddCustom={addCustomFood} />}
+      </Tab.Screen>
+      <Tab.Screen name="History">
+        {({ navigation }) => (
+          <HistoryScreen
+            meals={meals}
+            onDelete={deleteMeal}
+            onBack={() => navigation.navigate('Today')}
+          />
+        )}
+      </Tab.Screen>
+    </Tab.Navigator>
+  );
+}
+
+function PremiumTabBar({ state, navigation }: BottomTabBarProps) {
+  const insets = useSafeAreaInsets();
+  const activeRoute = state.routes[state.index]?.name;
+
+  if (activeRoute === 'History') return null;
+
+  return (
+    <View
+      pointerEvents="box-none"
+      style={[styles.tabBarOuter, { bottom: Math.max(insets.bottom, 10) }]}
+    >
+      <View style={styles.tabBarGlass}>
+        <AnimatedTabButton
+          label="Today"
+          Icon={Home}
+          active={activeRoute === 'Today'}
+          onPress={() => navigation.navigate('Today')}
+        />
+        <View style={styles.tabCenterSpacer} />
+        <AnimatedTabButton
+          label="Foods"
+          Icon={LibraryBig}
+          active={activeRoute === 'Foods'}
+          onPress={() => navigation.navigate('Foods')}
+        />
       </View>
-      <TabBar screen={screen} onChange={setScreen} />
+
+      <AnimatedAddButton
+        active={activeRoute === 'AddMeal'}
+        onPress={() => navigation.navigate('AddMeal')}
+      />
+    </View>
+  );
+}
+
+function AnimatedTabButton({
+  label,
+  Icon,
+  active,
+  onPress
+}: {
+  label: string;
+  Icon: LucideIcon;
+  active: boolean;
+  onPress: () => void;
+}) {
+  const progress = useSharedValue(active ? 1 : 0);
+
+  useEffect(() => {
+    progress.value = withTiming(active ? 1 : 0, { duration: 180 });
+  }, [active, progress]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(progress.value, [0, 1], [0.72, 1]),
+    transform: [
+      { translateY: interpolate(progress.value, [0, 1], [0, -2]) },
+      { scale: interpolate(progress.value, [0, 1], [1, 1.03]) }
+    ]
+  }));
+
+  return (
+    <Pressable
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      accessibilityLabel={label}
+      hitSlop={8}
+      onPress={onPress}
+      style={styles.tabHit}
+    >
+      <Animated.View style={[styles.tabItem, animatedStyle]}>
+        <View style={[styles.tabIconShell, active && styles.tabIconShellActive]}>
+          <Icon
+            size={20}
+            strokeWidth={active ? 2.4 : 2}
+            color={active ? theme.green : theme.muted2}
+          />
+        </View>
+        <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{label}</Text>
+      </Animated.View>
+    </Pressable>
+  );
+}
+
+function AnimatedAddButton({ active, onPress }: { active: boolean; onPress: () => void }) {
+  const progress = useSharedValue(active ? 1 : 0);
+
+  useEffect(() => {
+    progress.value = withSpring(active ? 1 : 0, {
+      damping: 18,
+      stiffness: 220,
+      mass: 0.7
+    });
+  }, [active, progress]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateY: interpolate(progress.value, [0, 1], [0, -3]) },
+      { scale: interpolate(progress.value, [0, 1], [1, 1.045]) }
+    ]
+  }));
+
+  return (
+    <Pressable
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      accessibilityLabel="Add meal"
+      hitSlop={10}
+      onPress={onPress}
+      style={styles.addTabHit}
+    >
+      <Animated.View style={[styles.addTabContent, animatedStyle]}>
+        <View style={[styles.addButton, active && styles.addButtonActive]}>
+          <Plus size={27} strokeWidth={2.5} color="#06251B" />
+        </View>
+        <Text style={[styles.addTabLabel, active && styles.addTabLabelActive]}>Add meal</Text>
+      </Animated.View>
+    </Pressable>
+  );
+}
+
+function TodayScreen({ meals, onHistory }: { meals: Meal[]; onHistory: () => void }) {
+  const insets = useSafeAreaInsets();
+  const todayKey = localDateKey(new Date());
+  const todayMeals = meals.filter((meal) => localDateKey(meal.createdAt) === todayKey);
+  const total = totalForMeals(todayMeals);
+  const dateLabel = new Date().toLocaleDateString(undefined, {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric'
+  });
+
+  return (
+    <SafeAreaView style={styles.screen} edges={['top']}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: 118 + insets.bottom }
+        ]}
+      >
+        <ScreenHeader
+          eyebrow="MealTrack"
+          title="Today"
+          subtitle={dateLabel}
+          action={
+            <IconButton label="Meal history" onPress={onHistory}>
+              <Clock3 size={20} color={theme.text} strokeWidth={2.1} />
+            </IconButton>
+          }
+        />
+
+        <View style={styles.heroCard}>
+          <Text style={styles.heroEyebrow}>Calories</Text>
+          <View style={styles.heroValueRow}>
+            <Text style={styles.heroNumber}>{Math.round(total.calories)}</Text>
+            <Text style={styles.heroUnit}>kcal</Text>
+          </View>
+          <Text style={styles.heroCaption}>
+            {todayMeals.length === 0
+              ? 'Nothing logged today'
+              : `${todayMeals.length} meal${todayMeals.length === 1 ? '' : 's'} logged`}
+          </Text>
+          <View style={styles.heroDivider} />
+          <MacroGrid nutrition={total} />
+        </View>
+
+        <View style={styles.sectionHeader}>
+          <View>
+            <Text style={styles.sectionKicker}>TODAY</Text>
+            <Text style={styles.sectionTitle}>Meals</Text>
+          </View>
+          {meals.length > 0 ? (
+            <Pressable onPress={onHistory} hitSlop={8}>
+              <Text style={styles.sectionAction}>View history</Text>
+            </Pressable>
+          ) : null}
+        </View>
+
+        {todayMeals.length === 0 ? (
+          <View style={styles.emptyState}>
+            <View style={styles.emptyIcon}>
+              <Plus size={18} color={theme.green} strokeWidth={2.2} />
+            </View>
+            <View style={styles.emptyCopy}>
+              <Text style={styles.emptyTitle}>Start with your next meal</Text>
+              <Text style={styles.muted}>
+                Use the center button below, choose a food, enter grams, and MealTrack calculates the nutrients.
+              </Text>
+            </View>
+          </View>
+        ) : (
+          todayMeals.map((meal) => <MealCard key={meal.id} meal={meal} />)
+        )}
+
+        <Text style={styles.footnote}>
+          Built-in foods use generic values per 100 g. For packaged food, save the exact nutrition label as a custom food.
+        </Text>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
-function TodayScreen({ meals, onAdd }: { meals: Meal[]; onAdd: () => void }) {
-  const todayKey = localDateKey(new Date());
-  const todayMeals = meals.filter((meal) => localDateKey(meal.createdAt) === todayKey);
-  const total = totalForMeals(todayMeals);
-
-  return (
-    <ScrollView contentContainerStyle={styles.scrollContent}>
-      <Text style={styles.brand}>MEALTRACK</Text>
-      <Text style={styles.h1}>Today</Text>
-      <Text style={styles.subtitle}>Log food whenever you eat. Nutrition is calculated locally on your phone.</Text>
-
-      <Card>
-        <View style={styles.heroRow}>
-          <View>
-            <Text style={styles.cardLabel}>Calories</Text>
-            <Text style={styles.heroNumber}>{Math.round(total.calories)}</Text>
-            <Text style={styles.unit}>kcal today</Text>
-          </View>
-          <Pressable style={styles.addCircle} onPress={onAdd}>
-            <Text style={styles.addCircleText}>+</Text>
-          </Pressable>
-        </View>
-        <View style={styles.divider} />
-        <MacroGrid nutrition={total} />
-      </Card>
-
-      <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Today's meals</Text>
-        <Pressable onPress={onAdd}><Text style={styles.link}>Add meal</Text></Pressable>
-      </View>
-
-      {todayMeals.length === 0 ? (
-        <Card>
-          <Text style={styles.emptyTitle}>Nothing logged yet</Text>
-          <Text style={styles.muted}>Tap Add meal, search for a food, enter the amount in grams, then save the meal.</Text>
-        </Card>
-      ) : (
-        todayMeals.map((meal) => <MealCard key={meal.id} meal={meal} />)
-      )}
-
-      <Text style={styles.footnote}>Built-in foods use generic values per 100 g. For packaged food, create a custom food using the nutrition label for the most accurate result.</Text>
-      <View style={{ height: 110 }} />
-    </ScrollView>
-  );
-}
-
 function AddMealScreen({ foods, onSave }: { foods: Food[]; onSave: (meal: Meal) => void }) {
+  const insets = useSafeAreaInsets();
   const [mealName, setMealName] = useState(defaultMealName());
   const [search, setSearch] = useState('');
   const [selectedFood, setSelectedFood] = useState<Food | null>(null);
@@ -318,14 +564,14 @@ function AddMealScreen({ foods, onSave }: { foods: Food[]; onSave: (meal: Meal) 
   const query = search.trim().toLowerCase();
   const results = foods
     .filter((food) => !query || food.name.toLowerCase().includes(query) || food.category.toLowerCase().includes(query))
-    .slice(0, 14);
+    .slice(0, query ? 14 : 8);
   const previewGrams = numberOrZero(grams);
   const preview = selectedFood ? scaleNutrition(selectedFood, previewGrams) : ZERO;
   const mealTotal = totalForItems(draft);
 
   const addSelected = () => {
     if (!selectedFood) {
-      Alert.alert('Choose a food', 'Search for a food and select it first.');
+      Alert.alert('Choose a food', 'Search the food library and select an item first.');
       return;
     }
     if (previewGrams <= 0) {
@@ -343,122 +589,193 @@ function AddMealScreen({ foods, onSave }: { foods: Food[]; onSave: (meal: Meal) 
       Alert.alert('Meal is empty', 'Add at least one food before saving.');
       return;
     }
+
     onSave({
       id: id('meal'),
       name: mealName.trim() || defaultMealName(),
       createdAt: new Date().toISOString(),
       items: draft
     });
+
+    setMealName(defaultMealName());
+    setSearch('');
+    setSelectedFood(null);
+    setGrams('100');
+    setDraft([]);
   };
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.brand}>ADD MEAL</Text>
-        <Text style={styles.h1}>What did you eat?</Text>
-        <Text style={styles.subtitle}>No AI. Pick a food from the local database or create your own food from a label.</Text>
+    <SafeAreaView style={styles.screen} edges={['top']}>
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: 118 + insets.bottom }
+          ]}
+        >
+          <ScreenHeader
+            eyebrow="Log meal"
+            title="What did you eat?"
+            subtitle="Select foods and enter the amount. Everything is calculated locally."
+          />
 
-        <Text style={styles.inputLabel}>Meal name</Text>
-        <TextInput
-          style={styles.input}
-          value={mealName}
-          onChangeText={setMealName}
-          placeholder="Breakfast, lunch, snack…"
-          placeholderTextColor="#657176"
-        />
+          <Text style={styles.fieldLabel}>Meal name</Text>
+          <TextInput
+            style={styles.input}
+            value={mealName}
+            onChangeText={setMealName}
+            placeholder="Breakfast"
+            placeholderTextColor={theme.muted2}
+          />
 
-        <Text style={styles.inputLabel}>Search foods</Text>
-        <TextInput
-          style={styles.input}
-          value={search}
-          onChangeText={(value) => { setSearch(value); setSelectedFood(null); }}
-          placeholder="Chicken, rice, banana…"
-          placeholderTextColor="#657176"
-          autoCapitalize="none"
-        />
-
-        <View style={styles.searchResults}>
-          {results.map((food) => {
-            const active = selectedFood?.id === food.id;
-            return (
-              <Pressable key={food.id} style={[styles.foodRow, active && styles.foodRowActive]} onPress={() => setSelectedFood(food)}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.foodName}>{food.name}</Text>
-                  <Text style={styles.foodMeta}>{food.category} · {Math.round(food.nutrients.calories)} kcal / 100 g{food.source === 'custom' ? ' · Custom' : ''}</Text>
-                </View>
-                <Text style={styles.chevron}>{active ? '✓' : '›'}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        {selectedFood ? (
-          <Card>
-            <Text style={styles.cardLabel}>Selected</Text>
-            <Text style={styles.cardTitle}>{selectedFood.name}</Text>
-            <Text style={styles.inputLabel}>Amount eaten (grams)</Text>
+          <Text style={styles.fieldLabel}>Find food</Text>
+          <View style={styles.searchInputWrap}>
+            <Search size={18} color={theme.muted2} strokeWidth={2} />
             <TextInput
-              style={styles.input}
-              value={grams}
-              onChangeText={setGrams}
-              keyboardType="decimal-pad"
-              placeholder="100"
-              placeholderTextColor="#657176"
+              style={styles.searchInput}
+              value={search}
+              onChangeText={(value) => {
+                setSearch(value);
+                if (selectedFood && value !== selectedFood.name) setSelectedFood(null);
+              }}
+              placeholder="Chicken, rice, banana…"
+              placeholderTextColor={theme.muted2}
+              autoCorrect={false}
             />
-            <View style={styles.previewCaloriesRow}>
-              <Text style={styles.previewCalories}>{Math.round(preview.calories)} kcal</Text>
-              <Text style={styles.muted}>{round(preview.protein)} g protein · {round(preview.carbs)} g carbs · {round(preview.fat)} g fat</Text>
-            </View>
-            <Pressable style={styles.primaryButton} onPress={addSelected}>
-              <Text style={styles.primaryButtonText}>Add to meal</Text>
-            </Pressable>
-          </Card>
-        ) : null}
+            {search ? (
+              <Pressable
+                onPress={() => {
+                  setSearch('');
+                  setSelectedFood(null);
+                }}
+                hitSlop={8}
+              >
+                <X size={17} color={theme.muted2} strokeWidth={2} />
+              </Pressable>
+            ) : null}
+          </View>
 
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Meal items</Text>
-          <Text style={styles.link}>{Math.round(mealTotal.calories)} kcal</Text>
-        </View>
-
-        {draft.length === 0 ? (
-          <Text style={styles.muted}>Select a food above to start building this meal.</Text>
-        ) : (
-          draft.map((item) => {
-            const itemNutrition = scaleNutrition(item.food, item.grams);
-            return (
-              <View key={item.id} style={styles.draftRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.foodName}>{item.food.name}</Text>
-                  <Text style={styles.foodMeta}>{round(item.grams, 0)} g · {Math.round(itemNutrition.calories)} kcal · P {round(itemNutrition.protein)} · C {round(itemNutrition.carbs)} · F {round(itemNutrition.fat)}</Text>
-                </View>
-                <Pressable onPress={() => setDraft((previous) => previous.filter((entry) => entry.id !== item.id))}>
-                  <Text style={styles.remove}>Remove</Text>
+          <View style={styles.searchResults}>
+            {results.map((food) => {
+              const active = selectedFood?.id === food.id;
+              return (
+                <Pressable
+                  key={food.id}
+                  onPress={() => {
+                    setSelectedFood(food);
+                    setSearch(food.name);
+                  }}
+                  style={[styles.foodSearchRow, active && styles.foodSearchRowActive]}
+                >
+                  <View style={styles.foodSearchCopy}>
+                    <Text style={styles.foodName}>{food.name}</Text>
+                    <Text style={styles.foodMeta}>
+                      {food.category} · {Math.round(food.nutrients.calories)} kcal / 100 g
+                    </Text>
+                  </View>
+                  {active ? <View style={styles.selectedDot} /> : null}
                 </Pressable>
+              );
+            })}
+          </View>
+
+          {selectedFood ? (
+            <View style={styles.editorCard}>
+              <View style={styles.editorHeader}>
+                <View style={styles.editorCopy}>
+                  <Text style={styles.editorTitle}>{selectedFood.name}</Text>
+                  <Text style={styles.foodMeta}>Amount eaten</Text>
+                </View>
+                <View style={styles.gramsInputWrap}>
+                  <TextInput
+                    style={styles.gramsInput}
+                    value={grams}
+                    onChangeText={setGrams}
+                    keyboardType="decimal-pad"
+                    selectTextOnFocus
+                  />
+                  <Text style={styles.gramsUnit}>g</Text>
+                </View>
               </View>
-            );
-          })
-        )}
 
-        {draft.length > 0 ? (
-          <Card>
-            <Text style={styles.cardLabel}>Meal total</Text>
-            <Text style={styles.heroNumber}>{Math.round(mealTotal.calories)}</Text>
-            <Text style={styles.unit}>kcal</Text>
-            <MacroGrid nutrition={mealTotal} />
-            <Pressable style={styles.primaryButton} onPress={saveMeal}>
-              <Text style={styles.primaryButtonText}>Save meal now</Text>
-            </Pressable>
-          </Card>
-        ) : null}
+              <View style={styles.previewRow}>
+                <Text style={styles.previewCalories}>{Math.round(preview.calories)} kcal</Text>
+                <Text style={styles.previewMacros}>
+                  P {round(preview.protein)} · C {round(preview.carbs)} · F {round(preview.fat)}
+                </Text>
+              </View>
 
-        <View style={{ height: 120 }} />
-      </ScrollView>
-    </KeyboardAvoidingView>
+              <PrimaryButton label="Add to meal" onPress={addSelected} />
+            </View>
+          ) : null}
+
+          {draft.length > 0 ? (
+            <>
+              <View style={styles.sectionHeader}>
+                <View>
+                  <Text style={styles.sectionKicker}>CURRENT MEAL</Text>
+                  <Text style={styles.sectionTitle}>{draft.length} item{draft.length === 1 ? '' : 's'}</Text>
+                </View>
+                <Text style={styles.mealTotalSmall}>{Math.round(mealTotal.calories)} kcal</Text>
+              </View>
+
+              <View style={styles.draftList}>
+                {draft.map((item) => {
+                  const itemNutrition = scaleNutrition(item.food, item.grams);
+                  return (
+                    <View key={item.id} style={styles.draftRow}>
+                      <View style={styles.draftCopy}>
+                        <Text style={styles.foodName}>{item.food.name}</Text>
+                        <Text style={styles.foodMeta}>
+                          {round(item.grams, 0)} g · {Math.round(itemNutrition.calories)} kcal · P {round(itemNutrition.protein)} · C {round(itemNutrition.carbs)} · F {round(itemNutrition.fat)}
+                        </Text>
+                      </View>
+                      <Pressable
+                        accessibilityLabel={`Remove ${item.food.name}`}
+                        hitSlop={10}
+                        onPress={() => setDraft((previous) => previous.filter((entry) => entry.id !== item.id))}
+                        style={styles.trashButton}
+                      >
+                        <Trash2 size={17} color={theme.danger} strokeWidth={2} />
+                      </Pressable>
+                    </View>
+                  );
+                })}
+              </View>
+
+              <View style={styles.totalCard}>
+                <View>
+                  <Text style={styles.heroEyebrow}>Meal total</Text>
+                  <View style={styles.heroValueRow}>
+                    <Text style={styles.totalNumber}>{Math.round(mealTotal.calories)}</Text>
+                    <Text style={styles.heroUnit}>kcal</Text>
+                  </View>
+                </View>
+                <MacroGrid nutrition={mealTotal} compact />
+                <PrimaryButton label="Save meal" onPress={saveMeal} />
+              </View>
+            </>
+          ) : null}
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
-function HistoryScreen({ meals, onDelete }: { meals: Meal[]; onDelete: (id: string) => void }) {
-  const sorted = [...meals].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+function HistoryScreen({
+  meals,
+  onDelete,
+  onBack
+}: {
+  meals: Meal[];
+  onDelete: (id: string) => void;
+  onBack: () => void;
+}) {
+  const sorted = [...meals].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
 
   const confirmDelete = (meal: Meal) => {
     Alert.alert('Delete meal?', `${meal.name} will be removed from your history.`, [
@@ -468,32 +785,57 @@ function HistoryScreen({ meals, onDelete }: { meals: Meal[]; onDelete: (id: stri
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.scrollContent}>
-      <Text style={styles.brand}>HISTORY</Text>
-      <Text style={styles.h1}>Meal log</Text>
-      <Text style={styles.subtitle}>Every saved meal stays on this device until you delete it.</Text>
+    <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: 28 }
+        ]}
+      >
+        <ScreenHeader
+          eyebrow="Meal log"
+          title="History"
+          subtitle={`${sorted.length} saved meal${sorted.length === 1 ? '' : 's'}`}
+          leading={
+            <IconButton label="Back to today" onPress={onBack}>
+              <ChevronLeft size={21} color={theme.text} strokeWidth={2.1} />
+            </IconButton>
+          }
+        />
 
-      {sorted.length === 0 ? (
-        <Card>
-          <Text style={styles.emptyTitle}>No history yet</Text>
-          <Text style={styles.muted}>Saved meals will appear here with their calorie and nutrient totals.</Text>
-        </Card>
-      ) : (
-        sorted.map((meal) => (
-          <View key={meal.id}>
-            <MealCard meal={meal} showDate />
-            <Pressable style={styles.deleteButton} onPress={() => confirmDelete(meal)}>
-              <Text style={styles.deleteText}>Delete this meal</Text>
-            </Pressable>
+        {sorted.length === 0 ? (
+          <View style={styles.emptyState}>
+            <View style={styles.emptyIcon}>
+              <Clock3 size={18} color={theme.green} strokeWidth={2.2} />
+            </View>
+            <View style={styles.emptyCopy}>
+              <Text style={styles.emptyTitle}>No meal history yet</Text>
+              <Text style={styles.muted}>Saved meals will appear here automatically.</Text>
+            </View>
           </View>
-        ))
-      )}
-      <View style={{ height: 110 }} />
-    </ScrollView>
+        ) : (
+          sorted.map((meal) => (
+            <View key={meal.id} style={styles.historyBlock}>
+              <MealCard meal={meal} showDate />
+              <Pressable
+                style={styles.deleteInline}
+                onPress={() => confirmDelete(meal)}
+                hitSlop={8}
+              >
+                <Trash2 size={14} color={theme.danger} strokeWidth={2} />
+                <Text style={styles.deleteInlineText}>Delete</Text>
+              </Pressable>
+            </View>
+          ))
+        )}
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 function FoodsScreen({ foods, onAddCustom }: { foods: Food[]; onAddCustom: (food: Food) => void }) {
+  const insets = useSafeAreaInsets();
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
@@ -506,13 +848,16 @@ function FoodsScreen({ foods, onAddCustom }: { foods: Food[]; onAddCustom: (food
   const [sodium, setSodium] = useState('');
 
   const query = search.trim().toLowerCase();
-  const results = foods.filter((food) => !query || food.name.toLowerCase().includes(query) || food.category.toLowerCase().includes(query));
+  const results = foods.filter(
+    (food) => !query || food.name.toLowerCase().includes(query) || food.category.toLowerCase().includes(query)
+  );
 
   const saveCustom = () => {
     if (!name.trim()) {
       Alert.alert('Food name required', 'Enter the name shown on the package or your own description.');
       return;
     }
+
     onAddCustom({
       id: id('custom'),
       name: name.trim(),
@@ -528,6 +873,7 @@ function FoodsScreen({ foods, onAddCustom }: { foods: Food[]; onAddCustom: (food
         numberOrZero(sodium)
       )
     });
+
     setName('');
     setCalories('');
     setProtein('');
@@ -537,75 +883,190 @@ function FoodsScreen({ foods, onAddCustom }: { foods: Food[]; onAddCustom: (food
     setSugar('');
     setSodium('');
     setShowForm(false);
-    Alert.alert('Food saved', 'Your custom food is now available in Add meal.');
+    Alert.alert('Food saved', 'Your custom food is now available when you log a meal.');
   };
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.brand}>FOOD LIBRARY</Text>
-        <Text style={styles.h1}>Foods</Text>
-        <Text style={styles.subtitle}>Search the built-in database or add exact values from any nutrition label.</Text>
+    <SafeAreaView style={styles.screen} edges={['top']}>
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: 118 + insets.bottom }
+          ]}
+        >
+          <ScreenHeader
+            eyebrow="Library"
+            title="Foods"
+            subtitle={`${foods.length} foods available`}
+            action={
+              <Pressable
+                style={[styles.headerPill, showForm && styles.headerPillActive]}
+                onPress={() => setShowForm((value) => !value)}
+              >
+                {showForm ? (
+                  <X size={16} color={theme.text} strokeWidth={2.1} />
+                ) : (
+                  <Plus size={16} color={theme.green} strokeWidth={2.3} />
+                )}
+                <Text style={[styles.headerPillText, showForm && styles.headerPillTextActive]}>
+                  {showForm ? 'Close' : 'Custom'}
+                </Text>
+              </Pressable>
+            }
+          />
 
-        <Pressable style={styles.primaryButton} onPress={() => setShowForm((value) => !value)}>
-          <Text style={styles.primaryButtonText}>{showForm ? 'Close custom food form' : '+ Add custom food'}</Text>
-        </Pressable>
+          {showForm ? (
+            <View style={styles.editorCard}>
+              <Text style={styles.editorTitle}>Custom food</Text>
+              <Text style={styles.muted}>Enter nutrition values per 100 g from the package label.</Text>
 
-        {showForm ? (
-          <Card>
-            <Text style={styles.cardTitle}>Nutrition per 100 g</Text>
-            <Text style={styles.muted}>Enter the label values normalized to 100 g. If the package only gives values per serving, convert them before saving.</Text>
-            <Text style={styles.inputLabel}>Food name</Text>
-            <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="Example: My granola" placeholderTextColor="#657176" />
-            <View style={styles.twoCol}>
-              <MiniInput label="Calories" value={calories} onChange={setCalories} />
-              <MiniInput label="Protein g" value={protein} onChange={setProtein} />
-              <MiniInput label="Carbs g" value={carbs} onChange={setCarbs} />
-              <MiniInput label="Fat g" value={fat} onChange={setFat} />
-              <MiniInput label="Fiber g" value={fiber} onChange={setFiber} />
-              <MiniInput label="Sugar g" value={sugar} onChange={setSugar} />
-              <MiniInput label="Sodium mg" value={sodium} onChange={setSodium} />
-            </View>
-            <Pressable style={styles.primaryButton} onPress={saveCustom}>
-              <Text style={styles.primaryButtonText}>Save custom food</Text>
-            </Pressable>
-          </Card>
-        ) : null}
+              <Text style={styles.fieldLabel}>Food name</Text>
+              <TextInput
+                style={styles.input}
+                value={name}
+                onChangeText={setName}
+                placeholder="Example: My granola"
+                placeholderTextColor={theme.muted2}
+              />
 
-        <Text style={styles.inputLabel}>Search library</Text>
-        <TextInput style={styles.input} value={search} onChangeText={setSearch} placeholder="Search food or category" placeholderTextColor="#657176" />
-
-        {results.map((food) => (
-          <View key={food.id} style={styles.libraryCard}>
-            <View style={styles.libraryTop}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.foodName}>{food.name}</Text>
-                <Text style={styles.foodMeta}>{food.category}{food.source === 'custom' ? ' · Custom' : ''} · per 100 g</Text>
+              <View style={styles.twoCol}>
+                <MiniInput label="Calories" value={calories} onChange={setCalories} />
+                <MiniInput label="Protein g" value={protein} onChange={setProtein} />
+                <MiniInput label="Carbs g" value={carbs} onChange={setCarbs} />
+                <MiniInput label="Fat g" value={fat} onChange={setFat} />
+                <MiniInput label="Fiber g" value={fiber} onChange={setFiber} />
+                <MiniInput label="Sugar g" value={sugar} onChange={setSugar} />
+                <MiniInput label="Sodium mg" value={sodium} onChange={setSodium} />
               </View>
-              <Text style={styles.libraryCalories}>{Math.round(food.nutrients.calories)} kcal</Text>
-            </View>
-            <Text style={styles.foodMeta}>Protein {round(food.nutrients.protein)} g · Carbs {round(food.nutrients.carbs)} g · Fat {round(food.nutrients.fat)} g · Fiber {round(food.nutrients.fiber)} g · Sugar {round(food.nutrients.sugar)} g · Sodium {Math.round(food.nutrients.sodium)} mg</Text>
-          </View>
-        ))}
 
-        <View style={{ height: 120 }} />
-      </ScrollView>
-    </KeyboardAvoidingView>
+              <PrimaryButton label="Save custom food" onPress={saveCustom} />
+            </View>
+          ) : null}
+
+          <View style={styles.searchInputWrap}>
+            <Search size={18} color={theme.muted2} strokeWidth={2} />
+            <TextInput
+              style={styles.searchInput}
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search food or category"
+              placeholderTextColor={theme.muted2}
+              autoCorrect={false}
+            />
+            {search ? (
+              <Pressable onPress={() => setSearch('')} hitSlop={8}>
+                <X size={17} color={theme.muted2} strokeWidth={2} />
+              </Pressable>
+            ) : null}
+          </View>
+
+          <View style={styles.libraryList}>
+            {results.map((food, index) => (
+              <View key={food.id} style={[styles.libraryRow, index > 0 && styles.libraryRowBorder]}>
+                <View style={styles.libraryRowTop}>
+                  <View style={styles.libraryCopy}>
+                    <Text style={styles.foodName}>{food.name}</Text>
+                    <Text style={styles.foodMeta}>
+                      {food.category}{food.source === 'custom' ? ' · Custom' : ''} · per 100 g
+                    </Text>
+                  </View>
+                  <Text style={styles.libraryCalories}>{Math.round(food.nutrients.calories)} kcal</Text>
+                </View>
+                <Text style={styles.libraryMacros}>
+                  P {round(food.nutrients.protein)} · C {round(food.nutrients.carbs)} · F {round(food.nutrients.fat)} · Fiber {round(food.nutrients.fiber)} g · Sugar {round(food.nutrients.sugar)} g · Sodium {Math.round(food.nutrients.sodium)} mg
+                </Text>
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+function ScreenHeader({
+  eyebrow,
+  title,
+  subtitle,
+  leading,
+  action
+}: {
+  eyebrow: string;
+  title: string;
+  subtitle?: string;
+  leading?: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <View style={styles.header}>
+      <View style={styles.headerTop}>
+        {leading ? <View style={styles.headerLeading}>{leading}</View> : null}
+        <View style={styles.headerCopy}>
+          <Text style={styles.headerEyebrow}>{eyebrow}</Text>
+          <Text style={styles.h1}>{title}</Text>
+        </View>
+        {action ? <View style={styles.headerAction}>{action}</View> : null}
+      </View>
+      {subtitle ? <Text style={styles.headerSubtitle}>{subtitle}</Text> : null}
+    </View>
+  );
+}
+
+function IconButton({
+  label,
+  onPress,
+  children
+}: {
+  label: string;
+  onPress: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      hitSlop={8}
+      onPress={onPress}
+      style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+    >
+      {children}
+    </Pressable>
+  );
+}
+
+function PrimaryButton({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}
+    >
+      <Text style={styles.primaryButtonText}>{label}</Text>
+    </Pressable>
   );
 }
 
 function MiniInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <View style={styles.miniInputWrap}>
-      <Text style={styles.inputLabel}>{label}</Text>
-      <TextInput style={styles.input} value={value} onChangeText={onChange} keyboardType="decimal-pad" placeholder="0" placeholderTextColor="#657176" />
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <TextInput
+        style={styles.input}
+        value={value}
+        onChangeText={onChange}
+        keyboardType="decimal-pad"
+        placeholder="0"
+        placeholderTextColor={theme.muted2}
+      />
     </View>
   );
 }
 
-function MacroGrid({ nutrition }: { nutrition: Nutrition }) {
+function MacroGrid({ nutrition, compact = false }: { nutrition: Nutrition; compact?: boolean }) {
   return (
-    <View style={styles.macroGrid}>
+    <View style={[styles.macroGrid, compact && styles.macroGridCompact]}>
       <Metric label="Protein" value={`${round(nutrition.protein)} g`} />
       <Metric label="Carbs" value={`${round(nutrition.carbs)} g`} />
       <Metric label="Fat" value={`${round(nutrition.fat)} g`} />
@@ -628,164 +1089,164 @@ function Metric({ label, value }: { label: string; value: string }) {
 function MealCard({ meal, showDate = false }: { meal: Meal; showDate?: boolean }) {
   const total = totalForItems(meal.items);
   const date = new Date(meal.createdAt);
+
   return (
-    <Card>
+    <View style={styles.mealCard}>
       <View style={styles.mealHeader}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.cardTitle}>{meal.name}</Text>
-          <Text style={styles.foodMeta}>{showDate ? date.toLocaleDateString() + ' · ' : ''}{date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {meal.items.length} item{meal.items.length === 1 ? '' : 's'}</Text>
+        <View style={styles.mealHeaderCopy}>
+          <Text style={styles.mealTitle}>{meal.name}</Text>
+          <Text style={styles.foodMeta}>
+            {showDate ? `${date.toLocaleDateString()} · ` : ''}
+            {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {meal.items.length} item{meal.items.length === 1 ? '' : 's'}
+          </Text>
         </View>
         <Text style={styles.mealCalories}>{Math.round(total.calories)} kcal</Text>
       </View>
-      {meal.items.map((item) => {
-        const itemTotal = scaleNutrition(item.food, item.grams);
-        return (
-          <View key={item.id} style={styles.mealItemRow}>
-            <Text style={styles.mealItemName}>{item.food.name}</Text>
-            <Text style={styles.mealItemValue}>{round(item.grams, 0)} g · {Math.round(itemTotal.calories)} kcal</Text>
-          </View>
-        );
-      })}
-      <View style={styles.divider} />
-      <Text style={styles.foodMeta}>P {round(total.protein)} g · C {round(total.carbs)} g · F {round(total.fat)} g · Fiber {round(total.fiber)} g · Sugar {round(total.sugar)} g · Sodium {Math.round(total.sodium)} mg</Text>
-    </Card>
-  );
-}
 
-function Card({ children }: { children: React.ReactNode }) {
-  return <View style={styles.card}>{children}</View>;
-}
-
-function TabBar({ screen, onChange }: { screen: Screen; onChange: (screen: Screen) => void }) {
-  const tabs: { key: Screen; label: string; icon: string }[] = [
-    { key: 'today', label: 'Today', icon: '◉' },
-    { key: 'add', label: 'Log', icon: '+' },
-    { key: 'history', label: 'History', icon: '↺' },
-    { key: 'foods', label: 'Foods', icon: '▦' }
-  ];
-
-  return (
-    <View style={styles.navDockWrap}>
-      <View style={styles.navDockGlow} />
-      <View style={styles.tabBar}>
-        {tabs.map((tab) => {
-          const active = tab.key === screen;
-          const isAdd = tab.key === 'add';
-
-          if (isAdd) {
-            return (
-              <Pressable
-                key={tab.key}
-                accessibilityRole="button"
-                accessibilityLabel="Log a meal"
-                onPress={() => onChange(tab.key)}
-                style={({ pressed }) => [styles.tab, styles.addTab, pressed && styles.navPressed]}
-              >
-                <View style={[styles.navAddHalo, active && styles.navAddHaloActive]}>
-                  <View style={[styles.navAddButton, active && styles.navAddButtonActive]}>
-                    <Text style={styles.navAddIcon}>{tab.icon}</Text>
-                  </View>
-                </View>
-                <Text style={[styles.navAddLabel, active && styles.tabTextActive]}>LOG MEAL</Text>
-              </Pressable>
-            );
-          }
-
+      <View style={styles.mealItems}>
+        {meal.items.map((item) => {
+          const itemTotal = scaleNutrition(item.food, item.grams);
           return (
-            <Pressable
-              key={tab.key}
-              accessibilityRole="button"
-              accessibilityState={{ selected: active }}
-              onPress={() => onChange(tab.key)}
-              style={({ pressed }) => [styles.tab, pressed && styles.navPressed]}
-            >
-              <View style={[styles.tabPill, active && styles.tabPillActive]}>
-                <View style={styles.navIconRow}>
-                  <Text style={[styles.navIcon, active && styles.navIconActive]}>{tab.icon}</Text>
-                  {active ? <View style={styles.navLiveDot} /> : null}
-                </View>
-                <Text style={[styles.tabText, active && styles.tabTextActive]}>{tab.label}</Text>
-              </View>
-            </Pressable>
+            <View key={item.id} style={styles.mealItemRow}>
+              <Text style={styles.mealItemName}>{item.food.name}</Text>
+              <Text style={styles.mealItemValue}>{round(item.grams, 0)} g · {Math.round(itemTotal.calories)} kcal</Text>
+            </View>
           );
         })}
       </View>
+
+      <Text style={styles.mealMacros}>
+        P {round(total.protein)} g · C {round(total.carbs)} g · F {round(total.fat)} g · Fiber {round(total.fiber)} g
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: theme.bg },
-  page: { flex: 1 },
-  scrollContent: { paddingHorizontal: 20, paddingTop: 24 },
-  loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  loadingText: { color: theme.muted, marginTop: 10, fontSize: 15 },
-  brand: { color: theme.green, fontWeight: '900', fontSize: 13, letterSpacing: 1.4 },
-  h1: { color: theme.text, fontWeight: '900', fontSize: 36, marginTop: 8, letterSpacing: -1 },
-  subtitle: { color: theme.muted, fontSize: 16, lineHeight: 24, marginTop: 8, marginBottom: 22 },
-  card: { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 24, padding: 18, marginBottom: 14 },
-  cardLabel: { color: theme.muted, fontSize: 13, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
-  cardTitle: { color: theme.text, fontSize: 21, fontWeight: '900', marginTop: 5 },
-  heroRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  heroNumber: { color: theme.text, fontSize: 48, fontWeight: '900', lineHeight: 54, marginTop: 4 },
-  unit: { color: theme.muted, fontSize: 13, fontWeight: '700' },
-  addCircle: { width: 58, height: 58, borderRadius: 29, backgroundColor: theme.green, alignItems: 'center', justifyContent: 'center' },
-  addCircleText: { color: '#04251C', fontSize: 34, fontWeight: '500', marginTop: -3 },
-  divider: { height: 1, backgroundColor: '#2B3539', marginVertical: 16 },
+  root: { flex: 1, backgroundColor: theme.bg },
+  flex: { flex: 1 },
+  screen: { flex: 1, backgroundColor: theme.bg },
+  loadingSafe: { flex: 1, backgroundColor: theme.bg },
+  loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
+  loadingMark: { width: 48, height: 48, borderRadius: 16, backgroundColor: theme.greenDark, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  loadingTitle: { color: theme.text, fontSize: 24, fontWeight: '900', letterSpacing: -0.5 },
+  loadingText: { color: theme.muted, fontSize: 14, marginTop: 6 },
+
+  scrollContent: { paddingHorizontal: 20, paddingTop: 8 },
+  header: { marginBottom: 22 },
+  headerTop: { minHeight: 56, flexDirection: 'row', alignItems: 'center' },
+  headerLeading: { marginRight: 12 },
+  headerCopy: { flex: 1 },
+  headerAction: { marginLeft: 12 },
+  headerEyebrow: { color: theme.green, fontSize: 11, lineHeight: 14, fontWeight: '900', letterSpacing: 1.25, textTransform: 'uppercase' },
+  h1: { color: theme.text, fontSize: 31, lineHeight: 36, fontWeight: '900', letterSpacing: -0.8, marginTop: 2 },
+  headerSubtitle: { color: theme.muted, fontSize: 14, lineHeight: 20, marginTop: 4 },
+  iconButton: { width: 42, height: 42, borderRadius: 14, backgroundColor: theme.surface2, alignItems: 'center', justifyContent: 'center' },
+  pressed: { opacity: 0.72, transform: [{ scale: 0.96 }] },
+  headerPill: { minHeight: 40, borderRadius: 14, backgroundColor: theme.surface2, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  headerPillActive: { backgroundColor: theme.surface3 },
+  headerPillText: { color: theme.green, fontSize: 12, fontWeight: '900' },
+  headerPillTextActive: { color: theme.text },
+
+  heroCard: { backgroundColor: theme.surface, borderRadius: 28, padding: 20, marginBottom: 26 },
+  heroEyebrow: { color: theme.muted, fontSize: 12, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8 },
+  heroValueRow: { flexDirection: 'row', alignItems: 'flex-end', marginTop: 3 },
+  heroNumber: { color: theme.text, fontSize: 58, lineHeight: 62, fontWeight: '900', letterSpacing: -2.6 },
+  totalNumber: { color: theme.text, fontSize: 42, lineHeight: 48, fontWeight: '900', letterSpacing: -1.7 },
+  heroUnit: { color: theme.muted, fontSize: 14, fontWeight: '800', marginLeft: 7, marginBottom: 9 },
+  heroCaption: { color: theme.muted, fontSize: 13, marginTop: 2 },
+  heroDivider: { height: 1, backgroundColor: theme.line, marginVertical: 18 },
+
   macroGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -5 },
-  metric: { width: '33.333%', paddingHorizontal: 5, marginBottom: 12 },
-  metricValue: { color: theme.text, fontSize: 16, fontWeight: '900' },
-  metricLabel: { color: theme.muted, fontSize: 12, marginTop: 3 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, marginBottom: 12 },
-  sectionTitle: { color: theme.text, fontSize: 22, fontWeight: '900' },
-  link: { color: theme.green, fontSize: 14, fontWeight: '900' },
-  emptyTitle: { color: theme.text, fontSize: 18, fontWeight: '900', marginBottom: 6 },
-  muted: { color: theme.muted, fontSize: 14, lineHeight: 21 },
-  footnote: { color: '#748086', fontSize: 12, lineHeight: 18, marginTop: 8 },
-  inputLabel: { color: theme.muted, fontSize: 12, fontWeight: '800', marginBottom: 6, marginTop: 10, textTransform: 'uppercase', letterSpacing: 0.4 },
-  input: { backgroundColor: theme.surface2, borderWidth: 1, borderColor: theme.border, color: theme.text, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 13, fontSize: 16 },
-  searchResults: { marginTop: 10, marginBottom: 14 },
-  foodRow: { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 16, padding: 14, flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  foodRowActive: { borderColor: theme.green, backgroundColor: '#0D211B' },
-  foodName: { color: theme.text, fontSize: 15, fontWeight: '800' },
-  foodMeta: { color: theme.muted, fontSize: 12, lineHeight: 18, marginTop: 3 },
-  chevron: { color: theme.green, fontSize: 24, fontWeight: '700', marginLeft: 10 },
-  previewCaloriesRow: { marginTop: 14, marginBottom: 8 },
-  previewCalories: { color: theme.green, fontSize: 28, fontWeight: '900', marginBottom: 4 },
-  primaryButton: { backgroundColor: theme.green, borderRadius: 16, paddingVertical: 15, alignItems: 'center', justifyContent: 'center', marginTop: 16 },
-  primaryButtonText: { color: '#05251C', fontSize: 15, fontWeight: '900' },
-  draftRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 16, padding: 14, marginBottom: 8 },
-  remove: { color: theme.danger, fontSize: 12, fontWeight: '900', marginLeft: 10 },
-  mealHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  mealCalories: { color: theme.green, fontSize: 18, fontWeight: '900', marginLeft: 12 },
-  mealItemRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 11 },
-  mealItemName: { color: theme.text, fontSize: 13, flex: 1, paddingRight: 10 },
-  mealItemValue: { color: theme.muted, fontSize: 12 },
-  deleteButton: { alignSelf: 'flex-end', marginTop: -8, marginBottom: 18, paddingHorizontal: 4, paddingVertical: 4 },
-  deleteText: { color: theme.danger, fontSize: 12, fontWeight: '800' },
+  macroGridCompact: { marginTop: 14 },
+  metric: { width: '33.333%', paddingHorizontal: 5, marginBottom: 13 },
+  metricValue: { color: theme.text, fontSize: 15, fontWeight: '900', letterSpacing: -0.2 },
+  metricLabel: { color: theme.muted2, fontSize: 11, marginTop: 3, fontWeight: '700' },
+
+  sectionHeader: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 12, marginTop: 4 },
+  sectionKicker: { color: theme.muted2, fontSize: 10, fontWeight: '900', letterSpacing: 1.2 },
+  sectionTitle: { color: theme.text, fontSize: 22, lineHeight: 27, fontWeight: '900', letterSpacing: -0.45, marginTop: 2 },
+  sectionAction: { color: theme.green, fontSize: 12, fontWeight: '900', marginBottom: 3 },
+
+  emptyState: { backgroundColor: theme.surface, borderRadius: 22, padding: 17, flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
+  emptyIcon: { width: 40, height: 40, borderRadius: 14, backgroundColor: theme.greenDark, alignItems: 'center', justifyContent: 'center', marginRight: 13 },
+  emptyCopy: { flex: 1 },
+  emptyTitle: { color: theme.text, fontSize: 15, fontWeight: '900', marginBottom: 4 },
+  muted: { color: theme.muted, fontSize: 13, lineHeight: 19 },
+  footnote: { color: theme.muted2, fontSize: 11, lineHeight: 17, marginTop: 8 },
+
+  fieldLabel: { color: theme.muted, fontSize: 11, fontWeight: '900', marginBottom: 7, marginTop: 12, textTransform: 'uppercase', letterSpacing: 0.7 },
+  input: { minHeight: 50, backgroundColor: theme.surface2, color: theme.text, borderRadius: 16, paddingHorizontal: 14, fontSize: 15, borderWidth: 1, borderColor: theme.line },
+  searchInputWrap: { minHeight: 52, backgroundColor: theme.surface2, borderRadius: 17, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: theme.line },
+  searchInput: { flex: 1, color: theme.text, fontSize: 15, paddingVertical: 12 },
+  searchResults: { marginTop: 10, marginBottom: 4 },
+  foodSearchRow: { minHeight: 60, borderRadius: 17, paddingHorizontal: 14, paddingVertical: 11, backgroundColor: theme.surface, flexDirection: 'row', alignItems: 'center', marginBottom: 7 },
+  foodSearchRowActive: { backgroundColor: '#10231D' },
+  foodSearchCopy: { flex: 1, paddingRight: 12 },
+  selectedDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: theme.green },
+  foodName: { color: theme.text, fontSize: 14, fontWeight: '800' },
+  foodMeta: { color: theme.muted, fontSize: 11, lineHeight: 16, marginTop: 3 },
+
+  editorCard: { backgroundColor: theme.surface, borderRadius: 24, padding: 17, marginTop: 10, marginBottom: 18 },
+  editorHeader: { flexDirection: 'row', alignItems: 'center' },
+  editorCopy: { flex: 1, paddingRight: 12 },
+  editorTitle: { color: theme.text, fontSize: 18, lineHeight: 23, fontWeight: '900', letterSpacing: -0.3 },
+  gramsInputWrap: { minWidth: 92, height: 48, borderRadius: 15, backgroundColor: theme.surface3, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center' },
+  gramsInput: { color: theme.text, fontSize: 18, fontWeight: '900', minWidth: 48, textAlign: 'right', paddingVertical: 8 },
+  gramsUnit: { color: theme.muted, fontSize: 13, fontWeight: '800', marginLeft: 4 },
+  previewRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 18 },
+  previewCalories: { color: theme.green, fontSize: 22, fontWeight: '900' },
+  previewMacros: { color: theme.muted, fontSize: 11, fontWeight: '800' },
+
+  primaryButton: { minHeight: 50, borderRadius: 16, backgroundColor: theme.green, alignItems: 'center', justifyContent: 'center', marginTop: 16 },
+  primaryButtonPressed: { opacity: 0.86, transform: [{ scale: 0.992 }] },
+  primaryButtonText: { color: '#05251B', fontSize: 14, fontWeight: '900' },
+
+  mealTotalSmall: { color: theme.green, fontSize: 14, fontWeight: '900', marginBottom: 3 },
+  draftList: { backgroundColor: theme.surface, borderRadius: 22, overflow: 'hidden' },
+  draftRow: { minHeight: 68, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.line },
+  draftCopy: { flex: 1, paddingRight: 10 },
+  trashButton: { width: 36, height: 36, borderRadius: 12, backgroundColor: 'rgba(255,122,122,0.08)', alignItems: 'center', justifyContent: 'center' },
+  totalCard: { backgroundColor: theme.surface, borderRadius: 24, padding: 18, marginTop: 14 },
+
+  mealCard: { backgroundColor: theme.surface, borderRadius: 22, padding: 16, marginBottom: 10 },
+  mealHeader: { flexDirection: 'row', alignItems: 'flex-start' },
+  mealHeaderCopy: { flex: 1, paddingRight: 10 },
+  mealTitle: { color: theme.text, fontSize: 17, fontWeight: '900', letterSpacing: -0.25 },
+  mealCalories: { color: theme.green, fontSize: 15, fontWeight: '900' },
+  mealItems: { marginTop: 12, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.line },
+  mealItemRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 },
+  mealItemName: { color: theme.text, fontSize: 12, flex: 1, paddingRight: 8 },
+  mealItemValue: { color: theme.muted, fontSize: 11 },
+  mealMacros: { color: theme.muted2, fontSize: 10.5, lineHeight: 15, fontWeight: '700', marginTop: 4 },
+
+  historyBlock: { marginBottom: 6 },
+  deleteInline: { alignSelf: 'flex-end', flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: -4, marginBottom: 12, paddingVertical: 5, paddingHorizontal: 5 },
+  deleteInlineText: { color: theme.danger, fontSize: 11, fontWeight: '900' },
+
   twoCol: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -5 },
   miniInputWrap: { width: '50%', paddingHorizontal: 5 },
-  libraryCard: { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 18, padding: 15, marginTop: 9 },
-  libraryTop: { flexDirection: 'row', alignItems: 'flex-start' },
-  libraryCalories: { color: theme.green, fontSize: 15, fontWeight: '900', marginLeft: 10 },
-  navDockWrap: { position: 'absolute', left: 12, right: 12, bottom: 10, height: 88, justifyContent: 'flex-end' },
-  navDockGlow: { position: 'absolute', left: 28, right: 28, bottom: 0, height: 58, borderRadius: 30, backgroundColor: '#0B2B23', opacity: 0.55, transform: [{ scaleX: 0.94 }], elevation: 10 },
-  tabBar: { height: 76, borderRadius: 30, backgroundColor: '#0E1416FA', borderWidth: 1, borderColor: '#2A373B', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingVertical: 6, elevation: 24, shadowColor: '#000000', shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.44, shadowRadius: 24 },
-  tab: { flex: 1, height: 64, justifyContent: 'center', alignItems: 'center' },
-  addTab: { marginTop: -23 },
-  navPressed: { transform: [{ scale: 0.92 }], opacity: 0.9 },
-  tabPill: { minWidth: 64, minHeight: 58, borderRadius: 21, paddingVertical: 7, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'transparent' },
-  tabPillActive: { backgroundColor: '#12231F', borderColor: '#25463C' },
-  navIconRow: { height: 27, minWidth: 30, alignItems: 'center', justifyContent: 'center' },
-  navIcon: { color: '#76858A', fontSize: 22, lineHeight: 25, fontWeight: '800' },
-  navIconActive: { color: theme.green },
-  navLiveDot: { position: 'absolute', top: -1, right: -2, width: 5, height: 5, borderRadius: 3, backgroundColor: '#5FFFC9', shadowColor: '#5FFFC9', shadowOpacity: 0.9, shadowRadius: 5, elevation: 4 },
-  navAddHalo: { width: 68, height: 68, borderRadius: 34, backgroundColor: '#10191A', borderWidth: 1, borderColor: '#304039', alignItems: 'center', justifyContent: 'center', elevation: 18, shadowColor: theme.green, shadowOffset: { width: 0, height: 7 }, shadowOpacity: 0.26, shadowRadius: 14 },
-  navAddHaloActive: { borderColor: '#52E6B4', backgroundColor: '#0E211C' },
-  navAddButton: { width: 56, height: 56, borderRadius: 28, backgroundColor: theme.green, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#68E7BC', elevation: 10 },
-  navAddButtonActive: { backgroundColor: '#32D9A2', transform: [{ scale: 1.04 }] },
-  navAddIcon: { color: '#03261C', fontSize: 36, lineHeight: 39, fontWeight: '400', marginTop: -4 },
-  navAddLabel: { color: '#879399', fontSize: 8, fontWeight: '900', letterSpacing: 1.1, marginTop: 2 },
-  tabText: { color: '#7F8C91', fontSize: 10, lineHeight: 12, fontWeight: '900', letterSpacing: 0.25, marginTop: 2 },
-  tabTextActive: { color: '#59E7B7' }
+  libraryList: { backgroundColor: theme.surface, borderRadius: 22, marginTop: 14, overflow: 'hidden' },
+  libraryRow: { paddingHorizontal: 15, paddingVertical: 14 },
+  libraryRowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.line },
+  libraryRowTop: { flexDirection: 'row', alignItems: 'flex-start' },
+  libraryCopy: { flex: 1, paddingRight: 12 },
+  libraryCalories: { color: theme.green, fontSize: 13, fontWeight: '900' },
+  libraryMacros: { color: theme.muted2, fontSize: 10.5, lineHeight: 16, marginTop: 8 },
+
+  tabBarOuter: { position: 'absolute', left: 18, right: 18, height: 82, alignItems: 'center', justifyContent: 'flex-end' },
+  tabBarGlass: { width: '100%', height: 68, borderRadius: 24, backgroundColor: 'rgba(17,21,21,0.96)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.24, shadowRadius: 20, elevation: 16 },
+  tabHit: { flex: 1, height: 62, alignItems: 'center', justifyContent: 'center' },
+  tabItem: { minWidth: 68, alignItems: 'center', justifyContent: 'center' },
+  tabIconShell: { width: 34, height: 30, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  tabIconShellActive: { backgroundColor: 'rgba(54,211,153,0.10)' },
+  tabLabel: { color: theme.muted2, fontSize: 10, fontWeight: '800', marginTop: 2 },
+  tabLabelActive: { color: theme.text },
+  tabCenterSpacer: { width: 90 },
+  addTabHit: { position: 'absolute', top: 0, width: 92, alignItems: 'center' },
+  addTabContent: { alignItems: 'center' },
+  addButton: { width: 58, height: 58, borderRadius: 20, backgroundColor: theme.green, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 7 }, shadowOpacity: 0.24, shadowRadius: 12, elevation: 12 },
+  addButtonActive: { backgroundColor: '#4BDBA5' },
+  addTabLabel: { color: theme.muted, fontSize: 10, fontWeight: '900', marginTop: 4 },
+  addTabLabelActive: { color: theme.text }
 });
