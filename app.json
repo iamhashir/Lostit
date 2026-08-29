@@ -10,6 +10,7 @@
         "expo-build-properties",
         {
           "android": {
+            "minSdkVersion": 24,
             "enableMinifyInReleaseBuilds": true,
             "enableShrinkResourcesInReleaseBuilds": true,
             "enableBundleCompression": true
@@ -18,7 +19,8 @@
       ]
     ],
     "android": {
-      "package": "com.iamhashir.mealtrack"
+      "package": "com.iamhashir.mealtrack",
+      "permissions": ["CAMERA"]
     },
     "ios": {
       "bundleIdentifier": "com.iamhashir.mealtrack"
