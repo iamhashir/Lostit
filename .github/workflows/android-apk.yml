@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android Release APK
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: android-apk-main
+  group: android-release-main
   cancel-in-progress: true
 
 jobs:
@@ -41,22 +41,31 @@ jobs:
           CI: '1'
         run: npx expo prebuild --platform android --clean
 
-      - name: Build installable debug APK
+      - name: Enable release optimizations
+        run: |
+          cat >> android/gradle.properties <<'EOF'
+          android.enableMinifyInReleaseBuilds=true
+          android.enableShrinkResourcesInReleaseBuilds=true
+          android.enableBundleCompression=true
+          reactNativeArchitectures=arm64-v8a
+          EOF
+
+      - name: Build optimized release APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon
 
       - name: Prepare APK
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk Lostit-latest.apk
-          ls -lh Lostit-latest.apk
+          cp android/app/build/outputs/apk/release/app-release.apk Lostit-arm64-release.apk
+          ls -lh Lostit-arm64-release.apk
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Lostit-Android-APK
-          path: Lostit-latest.apk
+          name: Lostit-Android-Release-APK
+          path: Lostit-arm64-release.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -65,8 +74,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --cleanup-tag --yes 2>/dev/null || true
-          gh release create latest Lostit-latest.apk \
-            --title "Latest Android APK" \
-            --notes "Automatically built from commit ${GITHUB_SHA}. Install Lostit-latest.apk on Android." \
+          gh release create latest Lostit-arm64-release.apk \
+            --title "Latest Android Release APK" \
+            --notes "Production-optimized ARM64 release build from commit ${GITHUB_SHA}. R8 minification, resource shrinking and bundle compression are enabled." \
             --prerelease \
             --target "${GITHUB_SHA}"
