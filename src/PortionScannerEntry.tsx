@@ -1,4 +1,4 @@
-import { Camera, Crosshair, Gauge, Ruler, X } from 'lucide-react-native';
+import { Camera, Check, Crosshair, Gauge, Ruler, X } from 'lucide-react-native';
 import React, { useMemo, useState } from 'react';
 import {
   Alert,
@@ -33,6 +33,31 @@ type DensityEstimate = {
   confidence: 'known' | 'generic';
 };
 
+type Gate = {
+  key: string;
+  label: string;
+  ok: boolean;
+};
+
+type ScanAssessment = {
+  distanceOk: boolean;
+  baseOk: boolean;
+  framingOk: boolean;
+  samplesOk: boolean;
+  stabilityOk: boolean;
+  confidenceOk: boolean;
+  geometryValid: boolean;
+  ready: boolean;
+  gates: Gate[];
+  headline: string;
+  instruction: string;
+};
+
+const REQUIRED_FRAMES = 6;
+const GOOD_BASE_RESIDUAL_MM = 12;
+const MIN_STABILITY = 0.62;
+const MIN_CONFIDENCE = 0.54;
+
 export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
   const [checking, setChecking] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -46,19 +71,11 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
   });
 
   const density = useMemo(() => densityForFood(foodName), [foodName]);
-  const liveGrams = reading ? estimateGrams(reading, density) : 0;
+  const assessment = useMemo(() => assessScan(reading), [reading]);
+  const liveGrams = reading && assessment.geometryValid ? estimateGrams(reading, density) : 0;
   const capturedGrams = capturedReading ? estimateGrams(capturedReading, density) : 0;
-  const quality = estimateQuality(reading);
   const ready = support?.depthSupported === true;
-  const canCapture = Boolean(
-    reading &&
-      reading.estimatedVolumeMl >= 5 &&
-      reading.estimateConfidence >= 0.58 &&
-      reading.stability >= 0.62 &&
-      reading.sampleWindow >= 6 &&
-      reading.distanceOk &&
-      !reading.componentTouchesGuide
-  );
+  const canCapture = Boolean(reading && assessment.ready);
 
   const openScanner = async (mode: ScanMode) => {
     if (Platform.OS !== 'android') {
@@ -93,7 +110,7 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
       setCapturedReading(null);
       setScannerStatus({
         state: 'starting',
-        message: 'Starting ARCore Depth. Move slowly around one item on a flat surface.'
+        message: 'Starting ARCore Depth. Move slowly around the item.'
       });
       setScannerOpen(true);
     } catch {
@@ -125,15 +142,17 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
 
     Alert.alert(
       'Estimated portion',
-      `MealTrack estimates about ${Math.round(capturedGrams)} g. Enter that amount in the grams field and verify it against a scale while calibrating.`
+      `MealTrack estimates about ${Math.round(capturedGrams)} g. Verify the estimate against a scale while calibrating.`
     );
   };
 
   const modeTitle = scanMode === 'food' ? `Scan ${foodName}` : 'Measure object';
   const guideLabel = scanMode === 'food'
-    ? 'ONE PORTION INSIDE · HARD FLAT BASE AROUND EDGES'
-    : 'ONE OBJECT INSIDE · HARD FLAT BASE AROUND EDGES';
-  const trustedReading = Boolean(reading && reading.estimatedVolumeMl >= 5);
+    ? 'ONE FOOD PORTION · FLAT BASE AROUND IT'
+    : 'ONE OBJECT · FLAT HARD BASE AROUND IT';
+
+  const showMeasurement = Boolean(reading && assessment.geometryValid && reading.sampleWindow >= 3);
+  const quality = estimateQuality(reading, assessment);
 
   return (
     <>
@@ -150,7 +169,7 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
               </View>
             </View>
             <Text style={styles.description}>
-              Round 2 rejects bad distance, soft surfaces, multiple objects and unstable frames before it reveals a final volume.
+              The scanner now rejects bad distance, uneven bases and unstable frames before showing a usable result.
             </Text>
           </View>
         </View>
@@ -161,7 +180,12 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
             accessibilityLabel={`Scan food portion for ${foodName}`}
             disabled={checking}
             onPress={() => openScanner('food')}
-            style={({ pressed }) => [styles.modeButton, styles.modeButtonPrimary, pressed && styles.buttonPressed, checking && styles.buttonDisabled]}
+            style={({ pressed }) => [
+              styles.modeButton,
+              styles.modeButtonPrimary,
+              pressed && styles.buttonPressed,
+              checking && styles.buttonDisabled
+            ]}
           >
             <Camera size={16} color="#06241A" strokeWidth={2.4} />
             <Text style={styles.modeButtonPrimaryText}>{checking ? 'Checking…' : 'Scan food'}</Text>
@@ -172,7 +196,12 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
             accessibilityLabel="Test depth scanner on a normal object"
             disabled={checking}
             onPress={() => openScanner('object')}
-            style={({ pressed }) => [styles.modeButton, styles.modeButtonSecondary, pressed && styles.buttonPressed, checking && styles.buttonDisabled]}
+            style={({ pressed }) => [
+              styles.modeButton,
+              styles.modeButtonSecondary,
+              pressed && styles.buttonPressed,
+              checking && styles.buttonDisabled
+            ]}
           >
             <Crosshair size={16} color="#DCE4E1" strokeWidth={2.2} />
             <Text style={styles.modeButtonSecondaryText}>Test object</Text>
@@ -180,7 +209,7 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
         </View>
 
         <Text style={[styles.status, ready && styles.statusReady]}>
-          {support?.message ?? 'Use one object on a hard flat surface. Object mode reports outside geometric volume only.'}
+          {support?.message ?? 'Use one item on a hard, flat surface. Object mode reports outside geometric volume.'}
         </Text>
       </View>
 
@@ -207,7 +236,7 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
             <View style={styles.scannerHeader}>
               <View style={styles.scannerHeaderCopy}>
                 <Text style={styles.scannerEyebrow}>
-                  {scanMode === 'food' ? 'ARCORE PORTION · ROUND 2' : 'ARCORE OBJECT VOLUME · ROUND 2'}
+                  {scanMode === 'food' ? 'ARCORE PORTION' : 'ARCORE OBJECT VOLUME'}
                 </Text>
                 <Text numberOfLines={1} style={styles.scannerTitle}>{modeTitle}</Text>
                 <Text style={styles.focusLine}>
@@ -226,7 +255,10 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
             </View>
 
             <View pointerEvents="none" style={styles.reticleWrap}>
-              <View style={[styles.scanGuide, reading?.componentTouchesGuide && styles.scanGuideWarning]}>
+              <View style={[
+                styles.scanGuide,
+                reading?.componentTouchesGuide && styles.scanGuideWarning
+              ]}>
                 <View style={styles.scanGuideCornerTL} />
                 <View style={styles.scanGuideCornerTR} />
                 <View style={styles.scanGuideCornerBL} />
@@ -237,32 +269,40 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
             </View>
 
             <View style={styles.hud}>
-              <Text style={styles.hudInstruction}>
-                Use a hard table or counter. Keep only one item in the guide, stay about 50–90 cm away, move slowly left/right for depth, then hold steady.
-              </Text>
+              <View style={styles.guidanceHeader}>
+                <Text style={styles.guidanceHeadline}>{assessment.headline}</Text>
+                <Text style={styles.guidanceText}>{assessment.instruction}</Text>
+              </View>
+
+              <View style={styles.gatesRow}>
+                {assessment.gates.map((gate) => (
+                  <View key={gate.key} style={[styles.gate, gate.ok && styles.gateOk]}>
+                    {gate.ok ? <Check size={11} color="#55E4AF" strokeWidth={3} /> : <View style={styles.gateDot} />}
+                    <Text style={[styles.gateText, gate.ok && styles.gateTextOk]}>{gate.label}</Text>
+                  </View>
+                ))}
+              </View>
 
               <View style={styles.metricGrid}>
                 <ScannerMetric
                   icon={<Gauge size={15} color="#55E4AF" strokeWidth={2.2} />}
                   label={scanMode === 'food' ? 'VOLUME' : 'OUTER VOLUME'}
-                  value={trustedReading && reading ? `${Math.round(reading.estimatedVolumeMl)} ml` : '—'}
+                  value={showMeasurement && reading ? `${Math.round(reading.estimatedVolumeMl)} ml` : '—'}
                 />
                 <ScannerMetric
                   icon={<Ruler size={15} color="#55E4AF" strokeWidth={2.2} />}
                   label={scanMode === 'food' ? 'EST. WEIGHT' : 'MAX HEIGHT'}
                   value={scanMode === 'food'
-                    ? (trustedReading && liveGrams > 0 ? `${Math.round(liveGrams)} g` : '—')
-                    : (trustedReading && reading ? `${(reading.estimatedHeightMm / 10).toFixed(1)} cm` : '—')}
+                    ? (showMeasurement && liveGrams > 0 ? `${Math.round(liveGrams)} g` : '—')
+                    : (showMeasurement && reading ? `${(reading.estimatedHeightMm / 10).toFixed(1)} cm` : '—')}
                   alignRight
                 />
                 <ScannerMetric
-                  label={scanMode === 'food' ? 'MAX HEIGHT' : 'STABILITY'}
-                  value={scanMode === 'food'
-                    ? (trustedReading && reading ? `${(reading.estimatedHeightMm / 10).toFixed(1)} cm` : '—')
-                    : stabilityLabel(reading)}
+                  label="STABILITY"
+                  value={stabilityLabel(reading)}
                 />
                 <ScannerMetric
-                  label="CONFIDENCE"
+                  label="QUALITY"
                   value={quality.label}
                   valueColor={quality.color}
                   alignRight
@@ -272,19 +312,22 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
               <View style={styles.statusRow}>
                 <View style={[
                   styles.statusDot,
-                  ['tracking', 'measuring'].includes(scannerStatus.state) && styles.statusDotReady,
-                  ['distance', 'surface', 'multiple', 'reframe'].includes(scannerStatus.state) && styles.statusDotWarning
+                  assessment.ready && styles.statusDotReady,
+                  !assessment.ready && reading && styles.statusDotWarning
                 ]} />
-                <Text style={styles.scannerStatus}>{scannerStatus.message}</Text>
+                <Text style={styles.scannerStatus}>
+                  {assessment.ready ? 'Measurement ready to capture.' : scannerStatus.message}
+                </Text>
               </View>
 
               {reading ? (
                 <View style={styles.diagnosticRow}>
                   <Text style={styles.diagnosticText}>
-                    {Math.round(reading.distanceCm)} cm · clean frames {reading.sampleWindow}/6 · stability {Math.round(reading.stability * 100)}%
+                    {Math.round(reading.distanceCm)} cm · {reading.sampleWindow}/9 frames · base error ±{Math.round(reading.planeResidualMm)} mm
                   </Text>
                   <Text style={styles.diagnosticText}>
-                    raw geometry {Math.round(reading.rawVolumeMl)} ml · base error ±{Math.round(reading.planeResidualMm)} mm
+                    stability {Math.round(reading.stability * 100)}% · confidence {Math.round(reading.estimateConfidence * 100)}%
+                    {__DEV__ ? ` · raw ${Math.round(reading.rawVolumeMl)} ml` : ''}
                   </Text>
                 </View>
               ) : null}
@@ -296,7 +339,7 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
                 </Text>
               ) : (
                 <Text style={styles.objectNote}>
-                  Object test measures the outside 3D shape above the flat base. It does not measure liquid remaining inside a bottle.
+                  Measures the object’s outside shape above the base. It cannot tell how much liquid is inside a bottle.
                 </Text>
               )}
 
@@ -312,13 +355,11 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
                         : `${Math.round(capturedReading.estimatedVolumeMl)} ml`}
                     </Text>
                     <Text style={styles.captureVolume}>
-                      {scanMode === 'food'
-                        ? `${Math.round(capturedReading.estimatedVolumeMl)} ml`
-                        : `${Math.round(capturedReading.estimatedVolumeMl)} cm³`}
+                      {Math.round(capturedReading.estimatedVolumeMl)} cm³
                     </Text>
                   </View>
                   <Text style={styles.captureResultHint}>
-                    Only clean frames are included. Compare repeated scans with a known object or kitchen scale while calibrating.
+                    Validated against distance, base quality, framing and temporal stability before capture.
                   </Text>
                   {scanMode === 'food' ? (
                     <Pressable
@@ -340,11 +381,15 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
                 accessibilityLabel="Capture stabilized measurement"
                 disabled={!canCapture}
                 onPress={captureEstimate}
-                style={({ pressed }) => [styles.captureButton, !canCapture && styles.captureButtonDisabled, pressed && canCapture && styles.buttonPressed]}
+                style={({ pressed }) => [
+                  styles.captureButton,
+                  !canCapture && styles.captureButtonDisabled,
+                  pressed && canCapture && styles.buttonPressed
+                ]}
               >
                 <Crosshair size={18} color="#05251B" strokeWidth={2.4} />
                 <Text style={styles.captureButtonText}>
-                  {canCapture ? 'Capture stable estimate' : 'Waiting for valid scan…'}
+                  {canCapture ? 'Capture measurement' : assessment.headline}
                 </Text>
               </Pressable>
             </View>
@@ -353,6 +398,85 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
       </Modal>
     </>
   );
+}
+
+function assessScan(reading: PortionDepthReading | null): ScanAssessment {
+  if (!reading) {
+    return {
+      distanceOk: false,
+      baseOk: false,
+      framingOk: false,
+      samplesOk: false,
+      stabilityOk: false,
+      confidenceOk: false,
+      geometryValid: false,
+      ready: false,
+      gates: [
+        { key: 'distance', label: 'Distance', ok: false },
+        { key: 'base', label: 'Flat base', ok: false },
+        { key: 'frame', label: 'Framing', ok: false },
+        { key: 'stable', label: 'Stable', ok: false }
+      ],
+      headline: 'Start scanning',
+      instruction: 'Use one item on a hard flat table. Keep empty table visible around it.'
+    };
+  }
+
+  const distanceOk = reading.distanceOk && reading.distanceCm >= 45 && reading.distanceCm <= 90;
+  const baseOk = Number.isFinite(reading.planeResidualMm) && reading.planeResidualMm <= GOOD_BASE_RESIDUAL_MM;
+  const framingOk = !reading.componentTouchesGuide && reading.objectPixelRatio >= 0.015 && reading.objectPixelRatio <= 0.72;
+  const samplesOk = reading.sampleWindow >= REQUIRED_FRAMES;
+  const stabilityOk = reading.stability >= MIN_STABILITY;
+  const confidenceOk = reading.estimateConfidence >= MIN_CONFIDENCE;
+  const geometryValid = distanceOk && baseOk && framingOk && reading.estimatedVolumeMl >= 5;
+  const ready = geometryValid && samplesOk && stabilityOk && confidenceOk;
+
+  let headline = 'Hold steady';
+  let instruction = `Collecting stable depth frames (${Math.min(reading.sampleWindow, REQUIRED_FRAMES)}/${REQUIRED_FRAMES}).`;
+
+  if (!distanceOk) {
+    headline = reading.distanceCm < 45 ? 'Move farther away' : 'Move closer';
+    instruction = `Current distance is ${Math.round(reading.distanceCm)} cm. Aim for about 50–75 cm.`;
+  } else if (!baseOk) {
+    headline = 'Use a hard flat surface';
+    instruction = `Base error is ±${Math.round(reading.planeResidualMm)} mm. Avoid bedsheets, cushions, folds and clutter.`;
+  } else if (!framingOk) {
+    headline = 'Center one item';
+    instruction = reading.componentTouchesGuide
+      ? 'The object reaches the green guide. Move back slightly or use a smaller object.'
+      : 'Keep one object centered with empty flat surface visible around every edge.';
+  } else if (!samplesOk) {
+    headline = 'Hold steady';
+    instruction = `Geometry is valid. Keep still while frames build (${reading.sampleWindow}/${REQUIRED_FRAMES}).`;
+  } else if (!stabilityOk) {
+    headline = 'Keep the phone still';
+    instruction = `Stability is ${Math.round(reading.stability * 100)}%. Wait for the measurement to settle.`;
+  } else if (!confidenceOk) {
+    headline = 'Improve the scan';
+    instruction = 'Move slightly side-to-side, then hold still. Better surface texture and lighting can help depth confidence.';
+  } else {
+    headline = 'Ready';
+    instruction = 'Distance, flat-base fit, framing and stability all passed.';
+  }
+
+  return {
+    distanceOk,
+    baseOk,
+    framingOk,
+    samplesOk,
+    stabilityOk,
+    confidenceOk,
+    geometryValid,
+    ready,
+    gates: [
+      { key: 'distance', label: 'Distance', ok: distanceOk },
+      { key: 'base', label: 'Flat base', ok: baseOk },
+      { key: 'frame', label: 'Framing', ok: framingOk },
+      { key: 'stable', label: 'Stable', ok: samplesOk && stabilityOk && confidenceOk }
+    ],
+    headline,
+    instruction
+  };
 }
 
 function ScannerMetric({
@@ -380,25 +504,24 @@ function ScannerMetric({
 }
 
 function estimateGrams(reading: PortionDepthReading, density: DensityEstimate) {
-  if (reading.estimatedVolumeMl < 5 || reading.estimateConfidence < 0.5) return 0;
+  if (reading.estimatedVolumeMl < 5 || reading.estimateConfidence < 0.35) return 0;
   return reading.estimatedVolumeMl * density.gramsPerMl;
 }
 
-function estimateQuality(reading: PortionDepthReading | null) {
+function estimateQuality(reading: PortionDepthReading | null, assessment: ScanAssessment) {
   if (!reading) return { label: 'Waiting', color: '#88928F' };
-  if (!reading.distanceOk) return { label: 'Distance', color: '#F0CA6B' };
-  if (reading.componentTouchesGuide) return { label: 'Reframe', color: '#F0CA6B' };
-  if (reading.estimatedVolumeMl >= 5 && reading.stability >= 0.62 && reading.sampleWindow >= 6) {
-    return { label: 'Good', color: '#55E4AF' };
-  }
-  if (reading.sampleWindow >= 3) return { label: 'Building', color: '#F0CA6B' };
-  return { label: 'Scanning', color: '#88928F' };
+  if (!assessment.distanceOk) return { label: 'Distance', color: '#F0CA6B' };
+  if (!assessment.baseOk) return { label: 'Base', color: '#FF9A7A' };
+  if (!assessment.framingOk) return { label: 'Reframe', color: '#F0CA6B' };
+  if (assessment.ready) return { label: 'Good', color: '#55E4AF' };
+  if (reading.stability >= 0.45) return { label: 'Fair', color: '#F0CA6B' };
+  return { label: 'Building', color: '#A0AAA7' };
 }
 
 function stabilityLabel(reading: PortionDepthReading | null) {
   if (!reading || reading.sampleWindow < 3) return 'Building';
-  if (reading.stability >= 0.72) return 'Good';
-  if (reading.stability >= 0.55) return 'Fair';
+  if (reading.stability >= 0.72 && reading.sampleWindow >= REQUIRED_FRAMES) return 'Good';
+  if (reading.stability >= 0.45) return 'Fair';
   return 'Low';
 }
 
@@ -464,39 +587,119 @@ const styles = StyleSheet.create({
   copy: { flex: 1 },
   titleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 7 },
   title: { color: '#F5F7F5', fontSize: 16, fontWeight: '800' },
-  betaPill: { borderRadius: 999, paddingHorizontal: 7, paddingVertical: 3, backgroundColor: '#17372D' },
+  betaPill: {
+    borderRadius: 999,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    backgroundColor: '#17372D'
+  },
   betaText: { color: '#42D8A0', fontSize: 8.5, fontWeight: '900', letterSpacing: 0.7 },
   description: { color: '#929C99', fontSize: 12.5, lineHeight: 18, marginTop: 5 },
   actionRow: { flexDirection: 'row', gap: 9, marginTop: 14 },
-  modeButton: { flex: 1, minHeight: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7 },
+  modeButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 7
+  },
   modeButtonPrimary: { backgroundColor: '#42D8A0' },
-  modeButtonSecondary: { backgroundColor: '#1B2321', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  modeButtonSecondary: {
+    backgroundColor: '#1B2321',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)'
+  },
   modeButtonPrimaryText: { color: '#06241A', fontSize: 12.5, fontWeight: '900' },
   modeButtonSecondaryText: { color: '#DCE4E1', fontSize: 12.5, fontWeight: '800' },
   buttonPressed: { transform: [{ scale: 0.985 }], opacity: 0.92 },
   buttonDisabled: { opacity: 0.55 },
   status: { color: '#707B78', fontSize: 10.5, lineHeight: 16, marginTop: 9 },
   statusReady: { color: '#66CFA7' },
+
   scannerRoot: { flex: 1, backgroundColor: '#030505' },
-  scannerShadeTop: { position: 'absolute', left: 0, right: 0, top: 0, height: 155, backgroundColor: 'rgba(0,0,0,0.34)' },
-  scannerShadeBottom: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 390, backgroundColor: 'rgba(0,0,0,0.43)' },
+  scannerShadeTop: {
+    position: 'absolute', left: 0, right: 0, top: 0, height: 155,
+    backgroundColor: 'rgba(0,0,0,0.34)'
+  },
+  scannerShadeBottom: {
+    position: 'absolute', left: 0, right: 0, bottom: 0, height: 430,
+    backgroundColor: 'rgba(0,0,0,0.46)'
+  },
   scannerOverlay: { flex: 1, justifyContent: 'space-between' },
-  scannerHeader: { minHeight: 80, paddingHorizontal: 18, paddingTop: 8, flexDirection: 'row', alignItems: 'center' },
+  scannerHeader: {
+    minHeight: 80,
+    paddingHorizontal: 18,
+    paddingTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
   scannerHeaderCopy: { flex: 1, paddingRight: 12 },
   scannerEyebrow: { color: '#55E4AF', fontSize: 10, fontWeight: '900', letterSpacing: 1.4 },
   scannerTitle: { color: '#F6F8F7', fontSize: 22, lineHeight: 28, fontWeight: '900', marginTop: 2 },
   focusLine: { color: '#A4B0AC', fontSize: 10.5, fontWeight: '700', marginTop: 3 },
-  closeButton: { width: 48, height: 48, borderRadius: 17, backgroundColor: 'rgba(10,15,14,0.75)', alignItems: 'center', justifyContent: 'center' },
-  reticleWrap: { position: 'absolute', top: '31%', alignSelf: 'center', alignItems: 'center' },
+  closeButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 17,
+    backgroundColor: 'rgba(10,15,14,0.75)',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  reticleWrap: { position: 'absolute', top: '30%', alignSelf: 'center', alignItems: 'center' },
   scanGuide: { width: 230, height: 190, alignItems: 'center', justifyContent: 'center' },
-  scanGuideWarning: { opacity: 0.62 },
-  scanGuideCornerTL: { position: 'absolute', top: 0, left: 0, width: 42, height: 42, borderTopWidth: 2, borderLeftWidth: 2, borderColor: '#58E6B1', borderTopLeftRadius: 24 },
-  scanGuideCornerTR: { position: 'absolute', top: 0, right: 0, width: 42, height: 42, borderTopWidth: 2, borderRightWidth: 2, borderColor: '#58E6B1', borderTopRightRadius: 24 },
-  scanGuideCornerBL: { position: 'absolute', bottom: 0, left: 0, width: 42, height: 42, borderBottomWidth: 2, borderLeftWidth: 2, borderColor: '#58E6B1', borderBottomLeftRadius: 24 },
-  scanGuideCornerBR: { position: 'absolute', bottom: 0, right: 0, width: 42, height: 42, borderBottomWidth: 2, borderRightWidth: 2, borderColor: '#58E6B1', borderBottomRightRadius: 24 },
-  reticleLabel: { color: '#D7F8EB', fontSize: 8.5, fontWeight: '900', letterSpacing: 0.85, marginTop: 9, backgroundColor: 'rgba(0,0,0,0.58)', paddingHorizontal: 9, paddingVertical: 5, borderRadius: 8 },
-  hud: { marginHorizontal: 14, marginBottom: 8, padding: 17, borderRadius: 25, backgroundColor: 'rgba(9,15,13,0.95)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' },
-  hudInstruction: { color: '#CDD5D2', fontSize: 12, lineHeight: 17 },
+  scanGuideWarning: { opacity: 0.58 },
+  scanGuideCornerTL: {
+    position: 'absolute', top: 0, left: 0, width: 42, height: 42,
+    borderTopWidth: 2, borderLeftWidth: 2, borderColor: '#58E6B1', borderTopLeftRadius: 24
+  },
+  scanGuideCornerTR: {
+    position: 'absolute', top: 0, right: 0, width: 42, height: 42,
+    borderTopWidth: 2, borderRightWidth: 2, borderColor: '#58E6B1', borderTopRightRadius: 24
+  },
+  scanGuideCornerBL: {
+    position: 'absolute', bottom: 0, left: 0, width: 42, height: 42,
+    borderBottomWidth: 2, borderLeftWidth: 2, borderColor: '#58E6B1', borderBottomLeftRadius: 24
+  },
+  scanGuideCornerBR: {
+    position: 'absolute', bottom: 0, right: 0, width: 42, height: 42,
+    borderBottomWidth: 2, borderRightWidth: 2, borderColor: '#58E6B1', borderBottomRightRadius: 24
+  },
+  reticleLabel: {
+    color: '#D7F8EB',
+    fontSize: 8.5,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    marginTop: 9,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 8
+  },
+  hud: {
+    marginHorizontal: 14,
+    marginBottom: 8,
+    padding: 17,
+    borderRadius: 25,
+    backgroundColor: 'rgba(9,15,13,0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)'
+  },
+  guidanceHeader: { marginBottom: 10 },
+  guidanceHeadline: { color: '#F5F7F5', fontSize: 15, fontWeight: '900' },
+  guidanceText: { color: '#A7B1AE', fontSize: 11, lineHeight: 16, marginTop: 3 },
+  gatesRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  gate: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 8, paddingVertical: 5, borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.045)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)'
+  },
+  gateOk: { backgroundColor: 'rgba(85,228,175,0.08)', borderColor: 'rgba(85,228,175,0.20)' },
+  gateDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#7D8985' },
+  gateText: { color: '#8C9894', fontSize: 9, fontWeight: '800' },
+  gateTextOk: { color: '#8DEAC8' },
   metricGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 13, rowGap: 10 },
   scannerMetric: { width: '50%' },
   scannerMetricRight: { alignItems: 'flex-end' },
@@ -509,19 +712,54 @@ const styles = StyleSheet.create({
   statusDotReady: { backgroundColor: '#55E4AF' },
   statusDotWarning: { backgroundColor: '#F0CA6B' },
   scannerStatus: { flex: 1, color: '#929D99', fontSize: 10.5, lineHeight: 15 },
-  diagnosticRow: { marginTop: 10, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 8, backgroundColor: 'rgba(255,255,255,0.035)' },
+  diagnosticRow: {
+    marginTop: 10,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(255,255,255,0.035)'
+  },
   diagnosticText: { color: '#6F7B77', fontSize: 9.5, lineHeight: 14 },
   densityNote: { color: '#71807A', fontSize: 10, lineHeight: 15, marginTop: 8 },
-  objectNote: { color: '#89958F', fontSize: 10, lineHeight: 15, marginTop: 8, paddingLeft: 9, borderLeftWidth: 2, borderLeftColor: '#355A4B' },
-  captureResult: { marginTop: 11, borderRadius: 16, padding: 12, backgroundColor: 'rgba(85,228,175,0.08)' },
+  objectNote: {
+    color: '#89958F',
+    fontSize: 10,
+    lineHeight: 15,
+    marginTop: 8,
+    paddingLeft: 9,
+    borderLeftWidth: 2,
+    borderLeftColor: '#355A4B'
+  },
+  captureResult: {
+    marginTop: 11,
+    borderRadius: 16,
+    padding: 12,
+    backgroundColor: 'rgba(85,228,175,0.08)'
+  },
   captureResultLabel: { color: '#55E4AF', fontSize: 8.5, fontWeight: '900', letterSpacing: 1 },
   captureValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 10, marginTop: 2 },
   captureResultValue: { color: '#F6F8F7', fontSize: 25, fontWeight: '900' },
   captureVolume: { color: '#93A19C', fontSize: 13, fontWeight: '800' },
   captureResultHint: { color: '#7C8985', fontSize: 9.5, lineHeight: 14, marginTop: 3 },
-  useButton: { minHeight: 40, borderRadius: 13, marginTop: 9, backgroundColor: '#1F3A31', alignItems: 'center', justifyContent: 'center' },
+  useButton: {
+    minHeight: 40,
+    borderRadius: 13,
+    marginTop: 9,
+    backgroundColor: '#1F3A31',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
   useButtonText: { color: '#7DE7BF', fontSize: 11.5, fontWeight: '900' },
-  captureButton: { minHeight: 50, marginTop: 12, borderRadius: 16, backgroundColor: '#55E4AF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  captureButtonDisabled: { opacity: 0.38 },
+  captureButton: {
+    minHeight: 50,
+    marginTop: 12,
+    borderRadius: 16,
+    backgroundColor: '#55E4AF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8
+  },
+  captureButtonDisabled: { opacity: 0.36 },
   captureButtonText: { color: '#05251B', fontSize: 13, fontWeight: '900' }
 });
