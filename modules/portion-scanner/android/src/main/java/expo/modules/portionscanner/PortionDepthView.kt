@@ -51,26 +51,19 @@ class PortionDepthView(
 
   private val backgroundRenderer = CameraBackgroundRenderer()
 
-  @Volatile
-  private var session: Session? = null
-
-  @Volatile
-  private var sessionResumed = false
-
-  @Volatile
-  private var surfaceWidth = 0
-
-  @Volatile
-  private var surfaceHeight = 0
-
-  @Volatile
-  private var displayGeometryDirty = true
+  @Volatile private var session: Session? = null
+  @Volatile private var sessionResumed = false
+  @Volatile private var surfaceWidth = 0
+  @Volatile private var surfaceHeight = 0
+  @Volatile private var displayGeometryDirty = true
 
   private var cameraTextureSession: Session? = null
   private var lastDepthDispatchMs = 0L
   private var lastStatusKey: String? = null
   private var autofocusEnabled = false
-  private val volumeHistory = ArrayDeque<Double>()
+  private var lastRawDepthTimestamp = Long.MIN_VALUE
+  private var lastFullDepthTimestamp = Long.MIN_VALUE
+  private val measurementHistory = ArrayDeque<MeasurementSample>()
 
   init {
     setBackgroundColor(0xFF050707.toInt())
@@ -92,7 +85,6 @@ class PortionDepthView(
   override fun onWindowVisibilityChanged(visibility: Int) {
     super.onWindowVisibilityChanged(visibility)
     if (!isAttachedToWindow) return
-
     if (visibility == View.VISIBLE) {
       glSurfaceView.onResume()
       startSessionIfPossible()
@@ -142,6 +134,7 @@ class PortionDepthView(
       backgroundRenderer.draw(frame)
 
       if (frame.camera.trackingState != TrackingState.TRACKING) {
+        measurementHistory.clear()
         emitStatus("move", "Move slowly so ARCore can lock onto the surface.")
         return
       }
@@ -151,65 +144,25 @@ class PortionDepthView(
       lastDepthDispatchMs = now
 
       try {
-        frame.acquireDepthImage16Bits().use { depthImage ->
-          val centerSample = sampleCenterDepth(depthImage)
-          val rawEstimate = estimateCentralVolume(frame, depthImage)
-          val stabilized = stabilize(rawEstimate)
-
-          if (centerSample.depthMm <= 0) {
-            emitStatus("move", "Depth is initializing. Move slowly around the item.")
-            return@use
+        frame.acquireDepthImage16Bits().use { fullDepth ->
+          var rawDepth: Image? = null
+          var rawConfidence: Image? = null
+          try {
+            rawDepth = frame.acquireRawDepthImage16Bits()
+            rawConfidence = frame.acquireRawDepthConfidenceImage()
+          } catch (_: NotYetAvailableException) {
+            rawDepth?.close()
+            rawDepth = null
+            rawConfidence?.close()
+            rawConfidence = null
           }
 
-          val distanceOk = centerSample.depthMm in MIN_RECOMMENDED_DISTANCE_MM..MAX_RECOMMENDED_DISTANCE_MM
-          val estimateReady = stabilized.volumeMl >= MIN_REPORTABLE_VOLUME_ML &&
-            stabilized.confidence >= MIN_REPORTABLE_CONFIDENCE &&
-            stabilized.stability >= MIN_REPORTABLE_STABILITY
-
-          emitStatus(
-            when {
-              !distanceOk -> "distance"
-              estimateReady -> "measuring"
-              else -> "tracking"
-            },
-            when {
-              centerSample.depthMm < MIN_RECOMMENDED_DISTANCE_MM ->
-                "Too close. Move back until the item and flat base are sharp and fully visible."
-              centerSample.depthMm > MAX_RECOMMENDED_DISTANCE_MM ->
-                "Move closer for a denser depth map."
-              estimateReady ->
-                "Stable volume is live. Keep the item centered and the phone nearly parallel to the base."
-              else ->
-                "Depth locked. Keep the item inside the guide with flat base visible around it."
-            }
-          )
-
-          onDepthUpdate(
-            mapOf(
-              "depthMm" to centerSample.depthMm,
-              "distanceCm" to centerSample.depthMm / 10.0,
-              "coverage" to max(centerSample.coverage, rawEstimate.coverage),
-              "depthWidth" to depthImage.width,
-              "depthHeight" to depthImage.height,
-              "tracking" to true,
-              "timestamp" to depthImage.timestamp.toDouble(),
-              "plateDepthMm" to rawEstimate.baseDepthMm,
-              "baseDepthMm" to rawEstimate.baseDepthMm,
-              "rawVolumeMl" to rawEstimate.volumeMl,
-              "estimatedVolumeMl" to stabilized.volumeMl,
-              "estimatedHeightMm" to stabilized.heightMm,
-              "foodPixelRatio" to rawEstimate.objectPixelRatio,
-              "objectPixelRatio" to rawEstimate.objectPixelRatio,
-              "planeResidualMm" to rawEstimate.planeResidualMm,
-              "estimateConfidence" to stabilized.confidence,
-              "stability" to stabilized.stability,
-              "sampleWindow" to stabilized.sampleWindow,
-              "autofocusEnabled" to autofocusEnabled,
-              "distanceOk" to distanceOk,
-              "componentTouchesGuide" to rawEstimate.touchesGuide,
-              "focalLengthPx" to rawEstimate.focalLengthPx
-            )
-          )
+          try {
+            processDepthFrame(frame, fullDepth, rawDepth, rawConfidence)
+          } finally {
+            rawConfidence?.close()
+            rawDepth?.close()
+          }
         }
       } catch (_: NotYetAvailableException) {
         emitStatus("move", "Depth is initializing. Move slowly around the item.")
@@ -219,6 +172,117 @@ class PortionDepthView(
     } catch (error: Throwable) {
       emitStatus("error", error.message ?: "ARCore depth frame failed.")
     }
+  }
+
+  private fun processDepthFrame(
+    frame: Frame,
+    fullDepth: Image,
+    rawDepth: Image?,
+    rawConfidence: Image?
+  ) {
+    val centerSample = sampleCenterDepth(fullDepth)
+    if (centerSample.depthMm <= 0) {
+      emitStatus("move", "Depth is initializing. Move slowly around the item.")
+      return
+    }
+
+    val rawIsUsable = rawDepth != null && rawConfidence != null &&
+      rawDepth.width == fullDepth.width && rawDepth.height == fullDepth.height &&
+      rawConfidence.width == fullDepth.width && rawConfidence.height == fullDepth.height
+
+    val newDepthData = if (rawIsUsable && rawDepth != null) {
+      val isNew = rawDepth.timestamp != lastRawDepthTimestamp
+      if (isNew) lastRawDepthTimestamp = rawDepth.timestamp
+      isNew
+    } else {
+      val isNew = fullDepth.timestamp != lastFullDepthTimestamp
+      if (isNew) lastFullDepthTimestamp = fullDepth.timestamp
+      isNew
+    }
+
+    val rawEstimate = estimateCentralVolume(
+      frame = frame,
+      image = fullDepth,
+      rawDepth = if (rawIsUsable) rawDepth else null,
+      rawConfidence = if (rawIsUsable) rawConfidence else null
+    )
+
+    val distanceOk = centerSample.depthMm in MIN_RECOMMENDED_DISTANCE_MM..MAX_RECOMMENDED_DISTANCE_MM
+    val geometryClean = rawEstimate.baseFlat &&
+      !rawEstimate.multipleObjects &&
+      !rawEstimate.touchesGuide
+
+    if (!distanceOk || !geometryClean) measurementHistory.clear()
+
+    val canEnterHistory = newDepthData &&
+      distanceOk &&
+      geometryClean &&
+      rawEstimate.volumeMl >= MIN_REPORTABLE_VOLUME_ML &&
+      rawEstimate.confidence >= MIN_HISTORY_CONFIDENCE
+
+    val stabilized = stabilize(rawEstimate, canEnterHistory)
+    val scanReady = distanceOk &&
+      geometryClean &&
+      stabilized.sampleWindow >= MIN_READY_FRAMES &&
+      stabilized.stability >= MIN_REPORTABLE_STABILITY &&
+      stabilized.confidence >= MIN_REPORTABLE_CONFIDENCE
+
+    emitStatus(
+      when {
+        centerSample.depthMm < MIN_RECOMMENDED_DISTANCE_MM -> "distance"
+        centerSample.depthMm > MAX_RECOMMENDED_DISTANCE_MM -> "distance"
+        !rawEstimate.baseFlat -> "surface"
+        rawEstimate.multipleObjects -> "multiple"
+        rawEstimate.touchesGuide -> "reframe"
+        scanReady -> "measuring"
+        else -> "tracking"
+      },
+      when {
+        centerSample.depthMm < MIN_RECOMMENDED_DISTANCE_MM ->
+          "Too close. Move back to about 50–90 cm so depth and focus are more reliable."
+        centerSample.depthMm > MAX_RECOMMENDED_DISTANCE_MM ->
+          "Move closer. Keep the item around 50–90 cm away for this measurement mode."
+        !rawEstimate.baseFlat ->
+          "Base surface is not flat enough. Use a hard table or counter and remove cloth, folds, bowls and nearby clutter."
+        rawEstimate.multipleObjects ->
+          "More than one raised object is detected. Leave only one item inside the guide."
+        rawEstimate.touchesGuide ->
+          "The object reaches the scan boundary. Move back slightly and leave empty flat surface around all sides."
+        scanReady ->
+          "Measurement locked. Hold steady, or capture the stable estimate."
+        rawEstimate.rawDepthAvailable && rawEstimate.rawConfidenceQuality < 0.35 ->
+          "Depth confidence is still building. Move slowly left and right, then hold steady."
+        else ->
+          "Collecting clean depth ${stabilized.sampleWindow}/$MIN_READY_FRAMES. Move slowly around the item, then hold steady."
+      }
+    )
+
+    onDepthUpdate(
+      mapOf(
+        "depthMm" to centerSample.depthMm,
+        "distanceCm" to centerSample.depthMm / 10.0,
+        "coverage" to max(centerSample.coverage, rawEstimate.coverage),
+        "depthWidth" to fullDepth.width,
+        "depthHeight" to fullDepth.height,
+        "tracking" to true,
+        "timestamp" to fullDepth.timestamp.toDouble(),
+        "plateDepthMm" to rawEstimate.baseDepthMm,
+        "baseDepthMm" to rawEstimate.baseDepthMm,
+        "rawVolumeMl" to rawEstimate.volumeMl,
+        "estimatedVolumeMl" to if (scanReady) stabilized.volumeMl else 0.0,
+        "estimatedHeightMm" to if (scanReady) stabilized.heightMm else 0.0,
+        "foodPixelRatio" to rawEstimate.objectPixelRatio,
+        "objectPixelRatio" to rawEstimate.objectPixelRatio,
+        "planeResidualMm" to rawEstimate.planeResidualMm,
+        "estimateConfidence" to stabilized.confidence,
+        "stability" to stabilized.stability,
+        "sampleWindow" to stabilized.sampleWindow,
+        "autofocusEnabled" to autofocusEnabled,
+        "distanceOk" to distanceOk,
+        "componentTouchesGuide" to rawEstimate.touchesGuide,
+        "focalLengthPx" to rawEstimate.focalLengthPx
+      )
+    )
   }
 
   private fun startSessionIfPossible() {
@@ -291,14 +355,14 @@ class PortionDepthView(
       sessionResumed = true
       cameraTextureSession = null
       displayGeometryDirty = true
-      volumeHistory.clear()
+      resetMeasurementState()
 
       emitStatus(
         "starting",
         if (autofocusEnabled) {
-          "ARCore Depth started with autofocus. Move slowly around the item."
+          "ARCore Depth started with continuous autofocus. Move slowly around one item on a flat surface."
         } else {
-          "ARCore Depth started. Keep the item farther away if the preview looks soft."
+          "ARCore Depth started with fixed focus fallback. Keep the item at least 50 cm away."
         }
       )
     } catch (error: Throwable) {
@@ -309,11 +373,10 @@ class PortionDepthView(
   private fun pauseSession() {
     val activeSession = session ?: return
     if (!sessionResumed) return
-
     try {
       activeSession.pause()
     } catch (_: Throwable) {
-      // Session may already be paused while the view is leaving the window.
+      // Session may already be paused.
     } finally {
       sessionResumed = false
     }
@@ -325,12 +388,16 @@ class PortionDepthView(
     session = null
     cameraTextureSession = null
     lastStatusKey = null
-    volumeHistory.clear()
+    resetMeasurementState()
   }
 
-  private fun currentDisplayRotation(): Int {
-    return display?.rotation ?: Surface.ROTATION_0
+  private fun resetMeasurementState() {
+    measurementHistory.clear()
+    lastRawDepthTimestamp = Long.MIN_VALUE
+    lastFullDepthTimestamp = Long.MIN_VALUE
   }
+
+  private fun currentDisplayRotation(): Int = display?.rotation ?: Surface.ROTATION_0
 
   private fun sampleCenterDepth(image: Image): DepthSample {
     val plane = image.planes.firstOrNull() ?: return DepthSample(0, 0.0)
@@ -339,7 +406,6 @@ class PortionDepthView(
     val centerY = image.height / 2
     val radiusX = max(2, image.width / 52)
     val radiusY = max(2, image.height / 52)
-
     val values = ArrayList<Int>()
     var attempted = 0
 
@@ -350,9 +416,7 @@ class PortionDepthView(
         if (x in 0 until image.width && y in 0 until image.height) {
           attempted += 1
           val millimeters = readDepthMm(buffer, plane.rowStride, plane.pixelStride, x, y)
-          if (millimeters in MIN_VALID_DEPTH_MM..MAX_VALID_DEPTH_MM) {
-            values.add(millimeters)
-          }
+          if (millimeters in MIN_VALID_DEPTH_MM..MAX_VALID_DEPTH_MM) values.add(millimeters)
         }
         x += 2
       }
@@ -361,16 +425,28 @@ class PortionDepthView(
 
     if (values.isEmpty()) return DepthSample(0, 0.0)
     values.sort()
-    val median = values[values.size / 2]
-    val coverage = if (attempted == 0) 0.0 else values.size.toDouble() / attempted.toDouble()
-    return DepthSample(median, coverage)
+    return DepthSample(
+      depthMm = values[values.size / 2],
+      coverage = values.size.toDouble() / max(1, attempted).toDouble()
+    )
   }
 
-  private fun estimateCentralVolume(frame: Frame, image: Image): VolumeEstimate {
+  private fun estimateCentralVolume(
+    frame: Frame,
+    image: Image,
+    rawDepth: Image?,
+    rawConfidence: Image?
+  ): VolumeEstimate {
     val plane = image.planes.firstOrNull() ?: return VolumeEstimate.empty()
     if (image.width < 20 || image.height < 20) return VolumeEstimate.empty()
 
     val buffer = plane.buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+    val rawPlane = rawDepth?.planes?.firstOrNull()
+    val confidencePlane = rawConfidence?.planes?.firstOrNull()
+    val rawBuffer = rawPlane?.buffer?.duplicate()?.order(ByteOrder.LITTLE_ENDIAN)
+    val confidenceBuffer = confidencePlane?.buffer?.duplicate()
+    val rawAvailable = rawBuffer != null && confidenceBuffer != null && rawPlane != null && confidencePlane != null
+
     val centerX = image.width / 2
     val centerY = image.height / 2
     val halfWidth = max(12, (image.width * ROI_WIDTH_FRACTION / 2.0).toInt())
@@ -385,7 +461,11 @@ class PortionDepthView(
 
     val allSamples = ArrayList<DepthPointSample>()
     val borderSamples = ArrayList<DepthPointSample>()
+    val rawBorderSamples = ArrayList<DepthPointSample>()
     var attempted = 0
+    var rawAttempted = 0
+    var rawHighConfidence = 0
+    var rawConfidenceSum = 0.0
 
     var y = yMin
     while (y <= yMax) {
@@ -406,32 +486,64 @@ class PortionDepthView(
             yPosition < BORDER_FRACTION ||
             yPosition > 1.0 - BORDER_FRACTION
           if (isBorder) borderSamples.add(sample)
+
+          if (rawAvailable && rawBuffer != null && confidenceBuffer != null && rawPlane != null && confidencePlane != null) {
+            rawAttempted += 1
+            val rawMm = readDepthMm(rawBuffer, rawPlane.rowStride, rawPlane.pixelStride, x, y)
+            val rawConfidenceValue = readConfidence(
+              confidenceBuffer,
+              confidencePlane.rowStride,
+              confidencePlane.pixelStride,
+              x,
+              y
+            )
+            if (rawMm in MIN_VALID_DEPTH_MM..MAX_VOLUME_DEPTH_MM && rawConfidenceValue > 0) {
+              rawConfidenceSum += rawConfidenceValue.toDouble() / 255.0
+              if (rawConfidenceValue >= RAW_CONFIDENCE_THRESHOLD) {
+                rawHighConfidence += 1
+                if (isBorder) {
+                  rawBorderSamples.add(DepthPointSample(x, y, nx, ny, rawMm))
+                }
+              }
+            }
+          }
         }
         x += stride
       }
       y += stride
     }
 
-    val coverage = if (attempted == 0) 0.0 else allSamples.size.toDouble() / attempted.toDouble()
+    val coverage = allSamples.size.toDouble() / max(1, attempted).toDouble()
     if (allSamples.size < MIN_TOTAL_SAMPLES || borderSamples.size < MIN_BORDER_SAMPLES) {
-      return VolumeEstimate.empty(coverage)
+      return VolumeEstimate.empty(coverage, rawAvailable)
     }
 
-    val initialDepths = borderSamples.map { it.depthMm }.sorted()
-    val borderMedian = percentileInt(initialDepths, 0.5)
-    var planeSamples = borderSamples.filter {
-      abs(it.depthMm - borderMedian) <= MAX_BORDER_OUTLIER_MM
+    val rawConfidenceQuality = if (rawAttempted == 0) {
+      0.5
+    } else {
+      val coverageQuality = rawHighConfidence.toDouble() / rawAttempted.toDouble()
+      val meanQuality = if (rawHighConfidence == 0) 0.0 else rawConfidenceSum / max(1, rawHighConfidence).toDouble()
+      (coverageQuality * 0.65 + meanQuality.coerceIn(0.0, 1.0) * 0.35).coerceIn(0.0, 1.0)
     }
 
-    if (planeSamples.size < MIN_BORDER_SAMPLES) return VolumeEstimate.empty(coverage)
+    val planeSeedSamples = if (rawBorderSamples.size >= MIN_RAW_BORDER_SAMPLES) {
+      rawBorderSamples
+    } else {
+      val borderDepths = borderSamples.map { it.depthMm }.sorted()
+      val median = percentileInt(borderDepths, 0.5)
+      borderSamples.filter { abs(it.depthMm - median) <= MAX_BORDER_OUTLIER_MM }
+    }
 
-    var planeFit = fitDepthPlane(planeSamples) ?: return VolumeEstimate.empty(coverage)
+    if (planeSeedSamples.size < MIN_BORDER_SAMPLES) return VolumeEstimate.empty(coverage, rawAvailable)
+
+    var planeSamples = planeSeedSamples
+    var planeFit = fitDepthPlane(planeSamples) ?: return VolumeEstimate.empty(coverage, rawAvailable)
     repeat(2) {
       val residuals = planeSamples.map {
         abs(planeFit.predict(it.nx, it.ny) - it.depthMm.toDouble())
       }.sorted()
       val medianResidual = percentileDouble(residuals, 0.5)
-      val threshold = max(MIN_PLANE_INLIER_THRESHOLD_MM, medianResidual * 2.8)
+      val threshold = max(MIN_PLANE_INLIER_THRESHOLD_MM, medianResidual * 2.6)
       val refined = planeSamples.filter {
         abs(planeFit.predict(it.nx, it.ny) - it.depthMm.toDouble()) <= threshold
       }
@@ -441,8 +553,17 @@ class PortionDepthView(
       }
     }
 
+    val fullBorderInliers = borderSamples.count {
+      abs(planeFit.predict(it.nx, it.ny) - it.depthMm.toDouble()) <= FULL_BORDER_FLATNESS_TOLERANCE_MM
+    }
+    val borderInlierRatio = fullBorderInliers.toDouble() / max(1, borderSamples.size).toDouble()
+    val baseFlat = planeFit.residualMm <= MAX_ACCEPTABLE_PLANE_RESIDUAL_MM &&
+      borderInlierRatio >= MIN_BORDER_INLIER_RATIO
+
     val focal = depthFocalLengths(frame, image.width, image.height)
-    if (focal.first <= 1.0 || focal.second <= 1.0) return VolumeEstimate.empty(coverage)
+    if (focal.first <= 1.0 || focal.second <= 1.0) {
+      return VolumeEstimate.emptyWithPlane(coverage, planeFit, rawAvailable, rawConfidenceQuality, baseFlat)
+    }
 
     val innerLeft = xMin + (roiWidth * BORDER_FRACTION).toInt()
     val innerRight = xMax - (roiWidth * BORDER_FRACTION).toInt()
@@ -454,13 +575,10 @@ class PortionDepthView(
     val heights = DoubleArray(cols * rows) { Double.NaN }
     val depths = IntArray(cols * rows)
     var innerValid = 0
-    var seedIndex = -1
-    var bestSeedDistance = Double.MAX_VALUE
 
     for (sample in allSamples) {
       if (sample.x !in innerLeft..innerRight || sample.y !in innerTop..innerBottom) continue
       innerValid += 1
-
       val predictedBaseDepth = planeFit.predict(sample.nx, sample.ny)
       val heightMm = predictedBaseDepth - sample.depthMm.toDouble()
       if (heightMm < MIN_OBJECT_HEIGHT_MM || heightMm > MAX_OBJECT_HEIGHT_MM) continue
@@ -471,59 +589,41 @@ class PortionDepthView(
       val index = row * cols + col
       heights[index] = heightMm
       depths[index] = sample.depthMm
-
-      val dx = sample.x - centerX
-      val dy = sample.y - centerY
-      val seedDistance = (dx * dx + dy * dy).toDouble()
-      if (seedDistance < bestSeedDistance) {
-        bestSeedDistance = seedDistance
-        seedIndex = index
-      }
     }
 
-    if (innerValid == 0 || seedIndex < 0) {
-      return VolumeEstimate.emptyWithPlane(coverage, planeFit)
+    if (innerValid == 0) {
+      return VolumeEstimate.emptyWithPlane(coverage, planeFit, rawAvailable, rawConfidenceQuality, baseFlat)
     }
 
-    val visited = BooleanArray(cols * rows)
-    val queue = ArrayDeque<Int>()
-    queue.add(seedIndex)
-    visited[seedIndex] = true
+    val components = findComponents(
+      heights = heights,
+      cols = cols,
+      rows = rows,
+      xMin = xMin,
+      yMin = yMin,
+      stride = stride,
+      centerX = centerX,
+      centerY = centerY
+    ).filter { it.indices.size >= MIN_OBJECT_SAMPLES }
 
-    val componentIndices = ArrayList<Int>()
-    val directions = intArrayOf(-1, 0, 1)
-
-    while (queue.isNotEmpty()) {
-      val index = queue.removeFirst()
-      if (heights[index].isNaN()) continue
-      componentIndices.add(index)
-
-      val row = index / cols
-      val col = index % cols
-      for (dy in directions) {
-        for (dx in directions) {
-          if (dx == 0 && dy == 0) continue
-          val nr = row + dy
-          val nc = col + dx
-          if (nr !in 0 until rows || nc !in 0 until cols) continue
-          val neighbor = nr * cols + nc
-          if (!visited[neighbor] && !heights[neighbor].isNaN()) {
-            visited[neighbor] = true
-            queue.add(neighbor)
-          }
-        }
-      }
+    if (components.isEmpty()) {
+      return VolumeEstimate.emptyWithPlane(coverage, planeFit, rawAvailable, rawConfidenceQuality, baseFlat)
     }
 
-    if (componentIndices.size < MIN_OBJECT_SAMPLES) {
-      return VolumeEstimate.emptyWithPlane(coverage, planeFit)
-    }
+    val primary = components.minByOrNull { it.centerDistanceSquared }
+      ?: return VolumeEstimate.emptyWithPlane(coverage, planeFit, rawAvailable, rawConfidenceQuality, baseFlat)
+
+    val secondLargest = components
+      .filter { it !== primary }
+      .maxOfOrNull { it.indices.size }
+      ?: 0
+    val multipleObjects = secondLargest >= max(MIN_SECONDARY_OBJECT_SAMPLES, (primary.indices.size * SECONDARY_COMPONENT_RATIO).toInt())
 
     var volumeMm3 = 0.0
     var touchesGuide = false
     val componentHeights = ArrayList<Int>()
 
-    for (index in componentIndices) {
+    for (index in primary.indices) {
       val row = index / cols
       val col = index % cols
       val x = xMin + col * stride
@@ -545,29 +645,38 @@ class PortionDepthView(
       }
     }
 
-    if (componentHeights.isEmpty()) return VolumeEstimate.emptyWithPlane(coverage, planeFit)
+    if (componentHeights.isEmpty()) {
+      return VolumeEstimate.emptyWithPlane(coverage, planeFit, rawAvailable, rawConfidenceQuality, baseFlat)
+    }
 
     componentHeights.sort()
     val volumeMl = volumeMm3 / 1000.0
     val estimatedHeightMm = percentileInt(componentHeights, 0.90).toDouble()
-    val objectPixelRatio = componentIndices.size.toDouble() / innerValid.toDouble()
+    val objectPixelRatio = primary.indices.size.toDouble() / max(1, innerValid).toDouble()
     val planeQuality = (1.0 - planeFit.residualMm / MAX_GOOD_PLANE_RESIDUAL_MM).coerceIn(0.0, 1.0)
+    val flatnessQuality = borderInlierRatio.coerceIn(0.0, 1.0)
     val componentQuality = when {
-      objectPixelRatio in 0.035..0.62 -> 1.0
-      objectPixelRatio in 0.015..0.78 -> 0.70
-      else -> 0.35
+      objectPixelRatio in 0.025..0.62 -> 1.0
+      objectPixelRatio in 0.012..0.78 -> 0.68
+      else -> 0.30
     }
-    val guideQuality = if (touchesGuide) 0.45 else 1.0
+    val guideQuality = if (touchesGuide) 0.2 else 1.0
+    val ambiguityQuality = if (multipleObjects) 0.15 else 1.0
+    val rawQuality = if (rawAvailable) rawConfidenceQuality.coerceIn(0.15, 1.0) else 0.55
+
     var confidence = (
-      coverage.coerceIn(0.0, 1.0) * 0.22 +
-        planeQuality * 0.38 +
-        componentQuality * 0.25 +
-        guideQuality * 0.15
+      coverage.coerceIn(0.0, 1.0) * 0.14 +
+        planeQuality * 0.22 +
+        flatnessQuality * 0.18 +
+        componentQuality * 0.16 +
+        rawQuality * 0.12 +
+        guideQuality * 0.09 +
+        ambiguityQuality * 0.09
       ).coerceIn(0.0, 1.0)
 
-    if (volumeMl < MIN_REPORTABLE_VOLUME_ML || volumeMl > MAX_REASONABLE_VOLUME_ML) {
-      confidence *= 0.55
-    }
+    if (!baseFlat) confidence *= 0.45
+    if (multipleObjects || touchesGuide) confidence *= 0.35
+    if (volumeMl < MIN_REPORTABLE_VOLUME_ML || volumeMl > MAX_REASONABLE_VOLUME_ML) confidence *= 0.5
 
     return VolumeEstimate(
       coverage = coverage,
@@ -578,13 +687,73 @@ class PortionDepthView(
       planeResidualMm = planeFit.residualMm,
       confidence = confidence,
       touchesGuide = touchesGuide,
-      focalLengthPx = (focal.first + focal.second) / 2.0
+      focalLengthPx = (focal.first + focal.second) / 2.0,
+      baseFlat = baseFlat,
+      multipleObjects = multipleObjects,
+      rawDepthAvailable = rawAvailable,
+      rawConfidenceQuality = rawConfidenceQuality,
+      borderInlierRatio = borderInlierRatio
     )
+  }
+
+  private fun findComponents(
+    heights: DoubleArray,
+    cols: Int,
+    rows: Int,
+    xMin: Int,
+    yMin: Int,
+    stride: Int,
+    centerX: Int,
+    centerY: Int
+  ): List<Component> {
+    val visited = BooleanArray(heights.size)
+    val components = ArrayList<Component>()
+    val queue = ArrayDeque<Int>()
+
+    for (start in heights.indices) {
+      if (visited[start] || heights[start].isNaN()) continue
+      visited[start] = true
+      queue.add(start)
+      val indices = ArrayList<Int>()
+      var centerDistanceSquared = Double.MAX_VALUE
+
+      while (queue.isNotEmpty()) {
+        val index = queue.removeFirst()
+        if (heights[index].isNaN()) continue
+        indices.add(index)
+
+        val row = index / cols
+        val col = index % cols
+        val x = xMin + col * stride
+        val y = yMin + row * stride
+        val dx = x - centerX
+        val dy = y - centerY
+        centerDistanceSquared = min(centerDistanceSquared, (dx * dx + dy * dy).toDouble())
+
+        for (dr in -1..1) {
+          for (dc in -1..1) {
+            if (dr == 0 && dc == 0) continue
+            val nr = row + dr
+            val nc = col + dc
+            if (nr !in 0 until rows || nc !in 0 until cols) continue
+            val neighbor = nr * cols + nc
+            if (!visited[neighbor] && !heights[neighbor].isNaN()) {
+              visited[neighbor] = true
+              queue.add(neighbor)
+            }
+          }
+        }
+      }
+
+      if (indices.isNotEmpty()) components.add(Component(indices, centerDistanceSquared))
+    }
+
+    return components
   }
 
   private fun depthFocalLengths(frame: Frame, depthWidth: Int, depthHeight: Int): Pair<Double, Double> {
     return try {
-      val intrinsics = frame.camera.imageIntrinsics
+      val intrinsics = frame.camera.textureIntrinsics
       val focal = intrinsics.focalLength
       val dimensions = intrinsics.imageDimensions
       if (dimensions[0] <= 0 || dimensions[1] <= 0) return Pair(0.0, 0.0)
@@ -609,46 +778,43 @@ class PortionDepthView(
     }
   }
 
-  private fun stabilize(raw: VolumeEstimate): StabilizedEstimate {
-    if (
-      raw.volumeMl >= MIN_REPORTABLE_VOLUME_ML &&
-      raw.confidence >= MIN_HISTORY_CONFIDENCE &&
-      !raw.touchesGuide
-    ) {
-      volumeHistory.addLast(raw.volumeMl)
-      while (volumeHistory.size > STABILITY_WINDOW) volumeHistory.removeFirst()
+  private fun stabilize(raw: VolumeEstimate, acceptSample: Boolean): StabilizedEstimate {
+    if (acceptSample) {
+      measurementHistory.addLast(MeasurementSample(raw.volumeMl, raw.heightMm, raw.confidence))
+      while (measurementHistory.size > STABILITY_WINDOW) measurementHistory.removeFirst()
     }
 
-    if (volumeHistory.isEmpty()) {
+    if (measurementHistory.isEmpty()) {
       return StabilizedEstimate(raw.volumeMl, raw.heightMm, raw.confidence, 0.0, 0)
     }
 
-    val values = volumeHistory.toList().sorted()
-    val medianVolume = percentileDouble(values, 0.5)
-    val deviations = values.map { abs(it - medianVolume) }.sorted()
+    val volumes = measurementHistory.map { it.volumeMl }.sorted()
+    val heights = measurementHistory.map { it.heightMm }.sorted()
+    val medianVolume = percentileDouble(volumes, 0.5)
+    val medianHeight = percentileDouble(heights, 0.5)
+    val deviations = volumes.map { abs(it - medianVolume) }.sorted()
     val mad = percentileDouble(deviations, 0.5)
     val relativeMad = if (medianVolume <= 1.0) 1.0 else mad / medianVolume
     val stability = when {
-      volumeHistory.size < 3 -> 0.20
-      volumeHistory.size < 5 -> (1.0 - relativeMad * 5.5).coerceIn(0.0, 0.75)
-      else -> (1.0 - relativeMad * 5.0).coerceIn(0.0, 1.0)
+      measurementHistory.size < 3 -> 0.18
+      measurementHistory.size < MIN_READY_FRAMES -> (1.0 - relativeMad * 6.0).coerceIn(0.0, 0.72)
+      else -> (1.0 - relativeMad * 5.2).coerceIn(0.0, 1.0)
     }
-
+    val historyConfidence = measurementHistory.map { it.confidence }.average()
     val stabilizedConfidence =
-      (raw.confidence * (0.72 + 0.28 * stability)).coerceIn(0.0, 1.0)
+      (historyConfidence * (0.68 + 0.32 * stability)).coerceIn(0.0, 1.0)
 
     return StabilizedEstimate(
       volumeMl = medianVolume,
-      heightMm = raw.heightMm,
+      heightMm = medianHeight,
       confidence = stabilizedConfidence,
       stability = stability,
-      sampleWindow = volumeHistory.size
+      sampleWindow = measurementHistory.size
     )
   }
 
   private fun fitDepthPlane(samples: List<DepthPointSample>): DepthPlaneFit? {
     if (samples.size < 3) return null
-
     var sumX = 0.0
     var sumY = 0.0
     var sumZ = 0.0
@@ -677,16 +843,13 @@ class PortionDepthView(
       doubleArrayOf(sumXY, sumYY, sumY, sumYZ),
       doubleArrayOf(sumX, sumY, samples.size.toDouble(), sumZ)
     )
-
     val solution = solveThreeByThree(matrix) ?: return null
     val fit = DepthPlaneFit(solution[0], solution[1], solution[2], 0.0)
-
     var squaredError = 0.0
     for (sample in samples) {
       val error = fit.predict(sample.nx, sample.ny) - sample.depthMm.toDouble()
       squaredError += error * error
     }
-
     return fit.copy(residualMm = sqrt(squaredError / samples.size.toDouble()))
   }
 
@@ -701,42 +864,35 @@ class PortionDepthView(
           pivotRow = row
         }
       }
-
       if (pivotValue < 1e-9) return null
-
       if (pivotRow != column) {
         val temp = matrix[column]
         matrix[column] = matrix[pivotRow]
         matrix[pivotRow] = temp
       }
-
       val pivot = matrix[column][column]
       for (cell in column..3) matrix[column][cell] /= pivot
-
       for (row in 0..2) {
         if (row == column) continue
         val factor = matrix[row][column]
-        for (cell in column..3) {
-          matrix[row][cell] -= factor * matrix[column][cell]
-        }
+        for (cell in column..3) matrix[row][cell] -= factor * matrix[column][cell]
       }
     }
-
     return doubleArrayOf(matrix[0][3], matrix[1][3], matrix[2][3])
   }
 
-  private fun readDepthMm(
-    buffer: ByteBuffer,
-    rowStride: Int,
-    pixelStride: Int,
-    x: Int,
-    y: Int
-  ): Int {
+  private fun readDepthMm(buffer: ByteBuffer, rowStride: Int, pixelStride: Int, x: Int, y: Int): Int {
     val byteIndex = y * rowStride + x * pixelStride
     if (byteIndex < 0 || byteIndex + 1 >= buffer.limit()) return 0
     val low = buffer.get(byteIndex).toInt() and 0xFF
     val high = buffer.get(byteIndex + 1).toInt() and 0xFF
     return (high shl 8) or low
+  }
+
+  private fun readConfidence(buffer: ByteBuffer, rowStride: Int, pixelStride: Int, x: Int, y: Int): Int {
+    val byteIndex = y * rowStride + x * pixelStride
+    if (byteIndex < 0 || byteIndex >= buffer.limit()) return 0
+    return buffer.get(byteIndex).toInt() and 0xFF
   }
 
   private fun percentileInt(sortedValues: List<Int>, percentile: Double): Int {
@@ -758,10 +914,7 @@ class PortionDepthView(
     onScannerStatus(mapOf("state" to state, "message" to message))
   }
 
-  private data class DepthSample(
-    val depthMm: Int,
-    val coverage: Double
-  )
+  private data class DepthSample(val depthMm: Int, val coverage: Double)
 
   private data class DepthPointSample(
     val x: Int,
@@ -780,6 +933,17 @@ class PortionDepthView(
     fun predict(nx: Double, ny: Double): Double = a * nx + b * ny + c
   }
 
+  private data class Component(
+    val indices: List<Int>,
+    val centerDistanceSquared: Double
+  )
+
+  private data class MeasurementSample(
+    val volumeMl: Double,
+    val heightMm: Double,
+    val confidence: Double
+  )
+
   private data class VolumeEstimate(
     val coverage: Double,
     val baseDepthMm: Double,
@@ -789,22 +953,26 @@ class PortionDepthView(
     val planeResidualMm: Double,
     val confidence: Double,
     val touchesGuide: Boolean,
-    val focalLengthPx: Double
+    val focalLengthPx: Double,
+    val baseFlat: Boolean,
+    val multipleObjects: Boolean,
+    val rawDepthAvailable: Boolean,
+    val rawConfidenceQuality: Double,
+    val borderInlierRatio: Double
   ) {
     companion object {
-      fun empty(coverage: Double = 0.0) = VolumeEstimate(
-        coverage = coverage,
-        baseDepthMm = 0.0,
-        volumeMl = 0.0,
-        heightMm = 0.0,
-        objectPixelRatio = 0.0,
-        planeResidualMm = 999.0,
-        confidence = 0.0,
-        touchesGuide = false,
-        focalLengthPx = 0.0
+      fun empty(coverage: Double = 0.0, rawAvailable: Boolean = false) = VolumeEstimate(
+        coverage, 0.0, 0.0, 0.0, 0.0, 999.0, 0.0, false, 0.0,
+        false, false, rawAvailable, 0.0, 0.0
       )
 
-      fun emptyWithPlane(coverage: Double, fit: DepthPlaneFit) = VolumeEstimate(
+      fun emptyWithPlane(
+        coverage: Double,
+        fit: DepthPlaneFit,
+        rawAvailable: Boolean,
+        rawConfidenceQuality: Double,
+        baseFlat: Boolean
+      ) = VolumeEstimate(
         coverage = coverage,
         baseDepthMm = fit.predict(0.0, 0.0),
         volumeMl = 0.0,
@@ -813,7 +981,12 @@ class PortionDepthView(
         planeResidualMm = fit.residualMm,
         confidence = 0.0,
         touchesGuide = false,
-        focalLengthPx = 0.0
+        focalLengthPx = 0.0,
+        baseFlat = baseFlat,
+        multipleObjects = false,
+        rawDepthAvailable = rawAvailable,
+        rawConfidenceQuality = rawConfidenceQuality,
+        borderInlierRatio = 0.0
       )
     }
   }
@@ -827,11 +1000,11 @@ class PortionDepthView(
   )
 
   companion object {
-    private const val DEPTH_EVENT_INTERVAL_MS = 180L
+    private const val DEPTH_EVENT_INTERVAL_MS = 250L
     private const val MIN_VALID_DEPTH_MM = 180
     private const val MAX_VALID_DEPTH_MM = 5000
     private const val MAX_VOLUME_DEPTH_MM = 1800
-    private const val MIN_RECOMMENDED_DISTANCE_MM = 380
+    private const val MIN_RECOMMENDED_DISTANCE_MM = 500
     private const val MAX_RECOMMENDED_DISTANCE_MM = 1000
 
     private const val ROI_WIDTH_FRACTION = 0.64
@@ -839,19 +1012,27 @@ class PortionDepthView(
     private const val BORDER_FRACTION = 0.18
 
     private const val MIN_TOTAL_SAMPLES = 90
-    private const val MIN_BORDER_SAMPLES = 30
+    private const val MIN_BORDER_SAMPLES = 24
+    private const val MIN_RAW_BORDER_SAMPLES = 16
     private const val MIN_OBJECT_SAMPLES = 8
-    private const val MAX_BORDER_OUTLIER_MM = 85
-    private const val MIN_PLANE_INLIER_THRESHOLD_MM = 12.0
-    private const val MAX_GOOD_PLANE_RESIDUAL_MM = 18.0
+    private const val MIN_SECONDARY_OBJECT_SAMPLES = 10
+    private const val SECONDARY_COMPONENT_RATIO = 0.28
+    private const val MAX_BORDER_OUTLIER_MM = 75
+    private const val MIN_PLANE_INLIER_THRESHOLD_MM = 10.0
+    private const val FULL_BORDER_FLATNESS_TOLERANCE_MM = 22.0
+    private const val MIN_BORDER_INLIER_RATIO = 0.66
+    private const val MAX_ACCEPTABLE_PLANE_RESIDUAL_MM = 14.0
+    private const val MAX_GOOD_PLANE_RESIDUAL_MM = 12.0
 
+    private const val RAW_CONFIDENCE_THRESHOLD = 128
     private const val MIN_OBJECT_HEIGHT_MM = 8.0
     private const val MAX_OBJECT_HEIGHT_MM = 750.0
     private const val MIN_REPORTABLE_VOLUME_ML = 5.0
     private const val MAX_REASONABLE_VOLUME_ML = 5000.0
-    private const val MIN_HISTORY_CONFIDENCE = 0.28
-    private const val MIN_REPORTABLE_CONFIDENCE = 0.48
-    private const val MIN_REPORTABLE_STABILITY = 0.45
+    private const val MIN_HISTORY_CONFIDENCE = 0.34
+    private const val MIN_REPORTABLE_CONFIDENCE = 0.58
+    private const val MIN_REPORTABLE_STABILITY = 0.62
+    private const val MIN_READY_FRAMES = 6
     private const val STABILITY_WINDOW = 9
   }
 }
