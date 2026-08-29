@@ -41,6 +41,7 @@ import {
   SafeAreaView,
   useSafeAreaInsets
 } from 'react-native-safe-area-context';
+import { PortionScannerEntry } from './src/PortionScannerEntry';
 
 type Nutrition = {
   calories: number;
@@ -706,6 +707,8 @@ function AddMealScreen({ foods, onSave }: { foods: Food[]; onSave: (meal: Meal) 
                   P {round(preview.protein)} · C {round(preview.carbs)} · F {round(preview.fat)}
                 </Text>
               </View>
+
+              <PortionScannerEntry foodName={selectedFood.name} />
 
               <PrimaryButton label="Add to meal" onPress={addSelected} />
             </View>
