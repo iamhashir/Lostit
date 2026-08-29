@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "FatLoss 90",
+    "slug": "fatloss90",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "android": {
+      "package": "com.example.fatloss90"
+    },
+    "ios": {
+      "bundleIdentifier": "com.example.fatloss90"
+    }
+  }
+}
