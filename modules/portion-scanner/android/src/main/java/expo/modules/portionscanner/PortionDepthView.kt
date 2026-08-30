@@ -63,6 +63,9 @@ class PortionDepthView(
   private var lastDepthDispatchMs = 0L
   private var lastStatusKey: String? = null
   private var autofocusEnabled = false
+  @Volatile private var roiWidthFraction = ROI_WIDTH_FRACTION
+  @Volatile private var roiHeightFraction = ROI_HEIGHT_FRACTION
+  private var invalidFrameStreak = 0
   private val history = ArrayDeque<HistorySample>()
 
   init {
@@ -256,38 +259,30 @@ class PortionDepthView(
     val distanceMm = surfaceDistance.distanceMm
     when {
       distanceMm <= 0.0 -> {
-        clearHistory()
         emitStatus(
           "surface",
           "Searching for the flat base. Keep one item centered and move slowly so ARCore can lock onto the table."
         )
       }
       distanceMm < MIN_RECOMMENDED_DISTANCE_MM -> {
-        clearHistory()
         emitStatus("distance", "Too close. Move back to about 50–75 cm.")
       }
       distanceMm > MAX_RECOMMENDED_DISTANCE_MM -> {
-        clearHistory()
         emitStatus("distance", "Too far. Move closer to about 50–75 cm.")
       }
       !baseOk -> {
-        clearHistory()
         emitStatus("base", "Base is not flat enough. Use a hard matte table with visible texture around the item.")
       }
       estimate.multipleObjects -> {
-        clearHistory()
         emitStatus("multiple", "More than one raised object is inside the guide. Leave only one item.")
       }
       estimate.centerOffset > MAX_CENTER_OFFSET -> {
-        clearHistory()
         emitStatus("center", "Center the item on the crosshair with empty base visible around it.")
       }
       estimate.touchesGuide -> {
-        clearHistory()
         emitStatus("reframe", "The item reaches the guide edge. Move back slightly and keep it fully inside.")
       }
       !framingOk -> {
-        clearHistory()
         emitStatus("reframe", "Keep one item centered with flat base visible around every side.")
       }
       stabilized.sampleWindow < MIN_CAPTURE_FRAMES ->
@@ -359,7 +354,7 @@ class PortionDepthView(
     if (surfaceWidth <= 0 || surfaceHeight <= 0) return null
 
     val centerX = surfaceWidth * HIT_CENTER_X_FRACTION
-    val centerY = surfaceHeight * HIT_CENTER_Y_FRACTION
+    val centerY = surfaceHeight * ROI_CENTER_Y_FRACTION.toFloat()
     val dx = surfaceWidth * HIT_RING_X_FRACTION
     val dy = surfaceHeight * HIT_RING_Y_FRACTION
 
@@ -510,13 +505,29 @@ class PortionDepthView(
     clearHistory()
   }
 
+  fun setRoiWidthFraction(value: Double) {
+    val next = value.coerceIn(MIN_ROI_WIDTH_FRACTION, MAX_ROI_WIDTH_FRACTION)
+    if (abs(next - roiWidthFraction) < 0.002) return
+    roiWidthFraction = next
+    invalidFrameStreak = 0
+    clearHistory()
+  }
+
+  fun setRoiHeightFraction(value: Double) {
+    val next = value.coerceIn(MIN_ROI_HEIGHT_FRACTION, MAX_ROI_HEIGHT_FRACTION)
+    if (abs(next - roiHeightFraction) < 0.002) return
+    roiHeightFraction = next
+    invalidFrameStreak = 0
+    clearHistory()
+  }
+
   private fun currentDisplayRotation(): Int = display?.rotation ?: Surface.ROTATION_0
 
   private fun sampleCenterDepth(image: Image): DepthSample {
     val plane = image.planes.firstOrNull() ?: return DepthSample(0, 0.0)
     val buffer = plane.buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
     val centerX = image.width / 2
-    val centerY = image.height / 2
+    val centerY = (image.height * ROI_CENTER_Y_FRACTION).roundToInt().coerceIn(0, image.height - 1)
     val radiusX = max(2, image.width / 52)
     val radiusY = max(2, image.height / 52)
     val values = ArrayList<Int>()
@@ -566,9 +577,9 @@ class PortionDepthView(
       confidenceImage.height == denseImage.height
 
     val centerX = denseImage.width / 2
-    val centerY = denseImage.height / 2
-    val halfWidth = max(12, (denseImage.width * ROI_WIDTH_FRACTION / 2.0).toInt())
-    val halfHeight = max(12, (denseImage.height * ROI_HEIGHT_FRACTION / 2.0).toInt())
+    val centerY = (denseImage.height * ROI_CENTER_Y_FRACTION).roundToInt().coerceIn(0, denseImage.height - 1)
+    val halfWidth = max(12, (denseImage.width * roiWidthFraction / 2.0).toInt())
+    val halfHeight = max(12, (denseImage.height * roiHeightFraction / 2.0).toInt())
     val xMin = max(0, centerX - halfWidth)
     val xMax = min(denseImage.width - 1, centerX + halfWidth)
     val yMin = max(0, centerY - halfHeight)
@@ -926,9 +937,14 @@ class PortionDepthView(
     freshDepth: Boolean
   ): StabilizedEstimate {
     if (!geometryOk || raw.confidence < MIN_HISTORY_CONFIDENCE) {
-      clearHistory()
-      return StabilizedEstimate(raw.volumeMl, raw.heightMm, raw.confidence, 0.0, 0)
+      invalidFrameStreak += 1
+      if (invalidFrameStreak >= MAX_INVALID_FRAME_STREAK) {
+        history.clear()
+      }
+      return summarizeHistory(raw, paused = true)
     }
+
+    invalidFrameStreak = 0
 
     if (freshDepth) {
       val currentMedian =
@@ -946,7 +962,7 @@ class PortionDepthView(
             abs(raw.baseDepthMm - currentBase) > HISTORY_RESET_BASE_JUMP_MM
           )
       ) {
-        clearHistory()
+        history.clear()
       }
 
       history.addLast(
@@ -960,8 +976,21 @@ class PortionDepthView(
       while (history.size > STABILITY_WINDOW) history.removeFirst()
     }
 
+    return summarizeHistory(raw, paused = false)
+  }
+
+  private fun summarizeHistory(
+    fallback: VolumeEstimate,
+    paused: Boolean
+  ): StabilizedEstimate {
     if (history.isEmpty()) {
-      return StabilizedEstimate(raw.volumeMl, raw.heightMm, raw.confidence, 0.0, 0)
+      return StabilizedEstimate(
+        fallback.volumeMl,
+        fallback.heightMm,
+        fallback.confidence,
+        0.0,
+        0
+      )
     }
 
     val volumes = history.map { it.volumeMl }.sorted()
@@ -971,13 +1000,14 @@ class PortionDepthView(
     val deviations = volumes.map { abs(it - medianVolume) }.sorted()
     val mad = percentileDouble(deviations, 0.5)
     val relativeMad = if (medianVolume <= 1.0) 1.0 else mad / medianVolume
-    val stability = when {
+    var stability = when {
       history.size < 3 -> 0.20
       history.size < MIN_CAPTURE_FRAMES ->
         (1.0 - relativeMad * 6.0).coerceIn(0.0, 0.78)
       else ->
         (1.0 - relativeMad * 5.2).coerceIn(0.0, 1.0)
     }
+    if (paused) stability *= 0.82
 
     val medianConfidence =
       percentileDouble(history.map { it.confidence }.sorted(), 0.5)
@@ -1237,7 +1267,6 @@ class PortionDepthView(
     private const val MAX_RECOMMENDED_DISTANCE_MM = 900
 
     private const val HIT_CENTER_X_FRACTION = 0.50f
-    private const val HIT_CENTER_Y_FRACTION = 0.39f
     private const val HIT_RING_X_FRACTION = 0.18f
     private const val HIT_RING_Y_FRACTION = 0.10f
     private const val MAX_DISTANCE_SOURCE_DISAGREEMENT_MM = 180.0
@@ -1246,8 +1275,13 @@ class PortionDepthView(
     private const val MIN_CENTER_FALLBACK_COVERAGE = 0.55
     private const val MAX_DISTANCE_PLANE_RESIDUAL_MM = 28.0
 
+    private const val ROI_CENTER_Y_FRACTION = 0.45
     private const val ROI_WIDTH_FRACTION = 0.64
-    private const val ROI_HEIGHT_FRACTION = 0.52
+    private const val ROI_HEIGHT_FRACTION = 0.30
+    private const val MIN_ROI_WIDTH_FRACTION = 0.28
+    private const val MAX_ROI_WIDTH_FRACTION = 0.82
+    private const val MIN_ROI_HEIGHT_FRACTION = 0.18
+    private const val MAX_ROI_HEIGHT_FRACTION = 0.55
     private const val BORDER_FRACTION = 0.18
 
     private const val MIN_TOTAL_SAMPLES = 90
@@ -1275,5 +1309,6 @@ class PortionDepthView(
     private const val STABILITY_WINDOW = 9
     private const val HISTORY_RESET_VOLUME_JUMP = 0.45
     private const val HISTORY_RESET_BASE_JUMP_MM = 45.0
+    private const val MAX_INVALID_FRAME_STREAK = 3
   }
 }

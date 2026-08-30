@@ -92,6 +92,12 @@ class PortionScannerModule : Module() {
 
     View(PortionDepthView::class) {
       Events("onDepthUpdate", "onScannerStatus")
+      Prop("roiWidthFraction") { view: PortionDepthView, value: Double ->
+        view.setRoiWidthFraction(value)
+      }
+      Prop("roiHeightFraction") { view: PortionDepthView, value: Double ->
+        view.setRoiHeightFraction(value)
+      }
     }
   }
 }

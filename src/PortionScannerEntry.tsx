@@ -1,10 +1,11 @@
 import { Camera, Check, Crosshair, Gauge, Ruler, X } from 'lucide-react-native';
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Modal,
   PermissionsAndroid,
   Platform,
+  PanResponder,
   Pressable,
   StatusBar,
   StyleSheet,
@@ -57,6 +58,13 @@ const REQUIRED_FRAMES = 6;
 const GOOD_BASE_RESIDUAL_MM = 12;
 const MIN_STABILITY = 0.62;
 const MIN_CONFIDENCE = 0.54;
+const ROI_CENTER_Y = 0.45;
+const DEFAULT_ROI_WIDTH = 0.64;
+const DEFAULT_ROI_HEIGHT = 0.30;
+const MIN_ROI_WIDTH = 0.28;
+const MAX_ROI_WIDTH = 0.82;
+const MIN_ROI_HEIGHT = 0.18;
+const MAX_ROI_HEIGHT = 0.55;
 
 export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
   const [checking, setChecking] = useState(false);
@@ -65,6 +73,23 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
   const [support, setSupport] = useState<PortionScannerSupport | null>(null);
   const [reading, setReading] = useState<PortionDepthReading | null>(null);
   const [capturedReading, setCapturedReading] = useState<PortionDepthReading | null>(null);
+  const [roiWidth, setRoiWidth] = useState(DEFAULT_ROI_WIDTH);
+  const [roiHeight, setRoiHeight] = useState(DEFAULT_ROI_HEIGHT);
+  const roiStart = useRef({ width: DEFAULT_ROI_WIDTH, height: DEFAULT_ROI_HEIGHT });
+  const resizePan = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: () => {
+      roiStart.current = { width: roiWidth, height: roiHeight };
+      setCapturedReading(null);
+    },
+    onPanResponderMove: (_, gesture) => {
+      const nextWidth = Math.max(MIN_ROI_WIDTH, Math.min(MAX_ROI_WIDTH, roiStart.current.width + gesture.dx / 390));
+      const nextHeight = Math.max(MIN_ROI_HEIGHT, Math.min(MAX_ROI_HEIGHT, roiStart.current.height + gesture.dy / 780));
+      setRoiWidth(nextWidth);
+      setRoiHeight(nextHeight);
+    }
+  }), [roiHeight, roiWidth]);
   const [scannerStatus, setScannerStatus] = useState<PortionScannerStatusEvent>({
     state: 'idle',
     message: 'Move slowly around the item when the scanner opens.'
@@ -225,6 +250,8 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
 
           <PortionDepthView
             style={StyleSheet.absoluteFill}
+            roiWidthFraction={roiWidth}
+            roiHeightFraction={roiHeight}
             onDepthUpdate={(event) => setReading(event.nativeEvent)}
             onScannerStatus={(event) => setScannerStatus(event.nativeEvent)}
           />
@@ -254,9 +281,16 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
               </Pressable>
             </View>
 
-            <View pointerEvents="none" style={styles.reticleWrap}>
+            <View
+              pointerEvents="box-none"
+              style={[
+                styles.reticleWrap,
+                { top: `${Math.max(6, (ROI_CENTER_Y - roiHeight / 2) * 100)}%` }
+              ]}
+            >
               <View style={[
                 styles.scanGuide,
+                { width: `${Math.round(roiWidth * 100)}%`, aspectRatio: roiWidth / roiHeight },
                 reading?.componentTouchesGuide && styles.scanGuideWarning
               ]}>
                 <View style={styles.scanGuideCornerTL} />
@@ -264,8 +298,17 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
                 <View style={styles.scanGuideCornerBL} />
                 <View style={styles.scanGuideCornerBR} />
                 <Crosshair size={31} color="#58E6B1" strokeWidth={1.7} />
+                <View
+                  accessibilityLabel="Resize measurement frame"
+                  accessibilityRole="adjustable"
+                  {...resizePan.panHandlers}
+                  style={styles.resizeHandle}
+                >
+                  <View style={styles.resizeHandleDot} />
+                </View>
               </View>
               <Text style={styles.reticleLabel}>{guideLabel}</Text>
+              <Text style={styles.resizeHint}>Drag the green corner handle until only the target sits inside the frame.</Text>
             </View>
 
             <View style={styles.hud}>
@@ -647,9 +690,39 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center'
   },
-  reticleWrap: { position: 'absolute', top: '30%', alignSelf: 'center', alignItems: 'center' },
-  scanGuide: { width: 230, height: 190, alignItems: 'center', justifyContent: 'center' },
+  reticleWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
+  scanGuide: { alignItems: 'center', justifyContent: 'center' },
   scanGuideWarning: { opacity: 0.58 },
+  resizeHandle: {
+    position: 'absolute',
+    right: -19,
+    bottom: -19,
+    width: 52,
+    height: 52,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  resizeHandleDot: {
+    width: 23,
+    height: 23,
+    borderRadius: 12,
+    backgroundColor: '#58E6B1',
+    borderWidth: 3,
+    borderColor: '#07110E'
+  },
+  resizeHint: {
+    color: '#C3CFCC',
+    fontSize: 9.5,
+    fontWeight: '700',
+    lineHeight: 13,
+    marginTop: 6,
+    maxWidth: 285,
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.48)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 7
+  },
   scanGuideCornerTL: {
     position: 'absolute', top: 0, left: 0, width: 42, height: 42,
     borderTopWidth: 2, borderLeftWidth: 2, borderColor: '#58E6B1', borderTopLeftRadius: 24

@@ -45,6 +45,8 @@ export type PortionScannerStatusEvent = {
 };
 
 export type PortionDepthViewProps = ViewProps & {
+  roiWidthFraction?: number;
+  roiHeightFraction?: number;
   onDepthUpdate?: (event: { nativeEvent: PortionDepthReading }) => void;
   onScannerStatus?: (event: { nativeEvent: PortionScannerStatusEvent }) => void;
 };
