@@ -19,7 +19,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -27,7 +26,7 @@ jobs:
         run: python scripts/patch-adjustable-scan-region.py
       - name: Verify TypeScript
         run: |
-          npm ci
+          npm install --no-audit --no-fund
           npm run typecheck
       - name: Commit scanner changes
         run: |
