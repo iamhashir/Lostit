@@ -39,6 +39,13 @@ jobs:
       - name: Type-check app
         run: npm run typecheck
 
+      - name: Verify scanner V3 adjustable ROI source
+        run: |
+          grep -q "roiWidthFraction" modules/portion-scanner/src/PortionScanner.ts
+          grep -q "setRoiWidthFraction" modules/portion-scanner/android/src/main/java/expo/modules/portionscanner/PortionDepthView.kt
+          grep -q "roiHeightFraction" modules/portion-scanner/android/src/main/java/expo/modules/portionscanner/PortionScannerModule.kt
+          grep -q "Resize measurement frame" src/PortionScannerEntry.tsx
+
       - name: Generate optimized Android project
         env:
           CI: '1'
@@ -71,7 +78,7 @@ jobs:
         run: |
           gh release delete latest --cleanup-tag --yes 2>/dev/null || true
           gh release create latest MealTrack-arm64-release.apk \
-            --title "Latest MealTrack Android APK" \
-            --notes "Direct ARM64 APK from commit ${GITHUB_SHA}. Download MealTrack-arm64-release.apk directly from this release." \
+            --title "MealTrack Scanner V3 Android APK" \
+            --notes "Direct ARM64 APK from commit ${GITHUB_SHA}. Scanner V3 includes the adjustable ARCore measurement ROI and native framing integration." \
             --prerelease \
             --target "${GITHUB_SHA}"
