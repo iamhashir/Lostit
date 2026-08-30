@@ -1,0 +1,185 @@
+name: Apply adjustable scanner region
+
+on:
+  push:
+    paths:
+      - '.github/workflows/adjustable-scan-region.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Patch scanner ROI
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          native = Path('modules/portion-scanner/android/src/main/java/expo/modules/portionscanner/PortionDepthView.kt')
+          s = native.read_text()
+          s = s.replace('  private var autofocusEnabled = false\n  private val history', '''  private var autofocusEnabled = false
+  @Volatile private var roiWidthFraction = ROI_WIDTH_FRACTION
+  @Volatile private var roiHeightFraction = ROI_HEIGHT_FRACTION
+  private val history''')
+          s = s.replace('  private fun currentDisplayRotation(): Int = display?.rotation ?: Surface.ROTATION_0\n', '''  fun setRoiWidthFraction(value: Double) {
+    roiWidthFraction = value.coerceIn(MIN_ROI_WIDTH_FRACTION, MAX_ROI_WIDTH_FRACTION)
+    clearHistory()
+  }
+
+  fun setRoiHeightFraction(value: Double) {
+    roiHeightFraction = value.coerceIn(MIN_ROI_HEIGHT_FRACTION, MAX_ROI_HEIGHT_FRACTION)
+    clearHistory()
+  }
+
+  private fun currentDisplayRotation(): Int = display?.rotation ?: Surface.ROTATION_0
+''')
+          s = s.replace('(denseImage.width * ROI_WIDTH_FRACTION / 2.0).toInt()', '(denseImage.width * roiWidthFraction / 2.0).toInt()')
+          s = s.replace('(denseImage.height * ROI_HEIGHT_FRACTION / 2.0).toInt()', '(denseImage.height * roiHeightFraction / 2.0).toInt()')
+          s = s.replace('    private const val ROI_HEIGHT_FRACTION = 0.52\n', '''    private const val ROI_HEIGHT_FRACTION = 0.52
+    private const val MIN_ROI_WIDTH_FRACTION = 0.28
+    private const val MAX_ROI_WIDTH_FRACTION = 0.82
+    private const val MIN_ROI_HEIGHT_FRACTION = 0.24
+    private const val MAX_ROI_HEIGHT_FRACTION = 0.72
+''')
+          native.write_text(s)
+
+          module = Path('modules/portion-scanner/android/src/main/java/expo/modules/portionscanner/PortionScannerModule.kt')
+          s = module.read_text()
+          s = s.replace('    View(PortionDepthView::class) {\n      Events("onDepthUpdate", "onScannerStatus")\n', '''    View(PortionDepthView::class) {
+      Events("onDepthUpdate", "onScannerStatus")
+      Prop("roiWidthFraction") { view: PortionDepthView, value: Double ->
+        view.setRoiWidthFraction(value)
+      }
+      Prop("roiHeightFraction") { view: PortionDepthView, value: Double ->
+        view.setRoiHeightFraction(value)
+      }
+''')
+          module.write_text(s)
+
+          ts = Path('modules/portion-scanner/src/PortionScanner.ts')
+          s = ts.read_text()
+          s = s.replace('export type PortionDepthViewProps = ViewProps & {\n', '''export type PortionDepthViewProps = ViewProps & {
+  roiWidthFraction?: number;
+  roiHeightFraction?: number;
+''')
+          ts.write_text(s)
+
+          ui = Path('src/PortionScannerEntry.tsx')
+          s = ui.read_text()
+          s = s.replace("  Pressable,\n  StatusBar,", "  Pressable,\n  PanResponder,\n  StatusBar,")
+          s = s.replace("import React, { useMemo, useState } from 'react';", "import React, { useMemo, useRef, useState } from 'react';")
+          s = s.replace("const MIN_CONFIDENCE = 0.54;\n", '''const MIN_CONFIDENCE = 0.54;
+const DEFAULT_ROI_WIDTH = 0.64;
+const DEFAULT_ROI_HEIGHT = 0.52;
+const MIN_ROI_WIDTH = 0.28;
+const MAX_ROI_WIDTH = 0.82;
+const MIN_ROI_HEIGHT = 0.24;
+const MAX_ROI_HEIGHT = 0.72;
+''')
+          s = s.replace("  const [capturedReading, setCapturedReading] = useState<PortionDepthReading | null>(null);\n", '''  const [capturedReading, setCapturedReading] = useState<PortionDepthReading | null>(null);
+  const [roiWidth, setRoiWidth] = useState(DEFAULT_ROI_WIDTH);
+  const [roiHeight, setRoiHeight] = useState(DEFAULT_ROI_HEIGHT);
+  const roiStart = useRef({ width: DEFAULT_ROI_WIDTH, height: DEFAULT_ROI_HEIGHT });
+  const resizePan = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: () => {
+      roiStart.current = { width: roiWidth, height: roiHeight };
+    },
+    onPanResponderMove: (_, gesture) => {
+      const nextWidth = Math.max(MIN_ROI_WIDTH, Math.min(MAX_ROI_WIDTH, roiStart.current.width + gesture.dx / 430));
+      const nextHeight = Math.max(MIN_ROI_HEIGHT, Math.min(MAX_ROI_HEIGHT, roiStart.current.height + gesture.dy / 700));
+      setRoiWidth(nextWidth);
+      setRoiHeight(nextHeight);
+      setCapturedReading(null);
+    }
+  }), [roiHeight, roiWidth]);
+''')
+          s = s.replace('          <PortionDepthView\n            style={StyleSheet.absoluteFill}\n', '''          <PortionDepthView
+            style={StyleSheet.absoluteFill}
+            roiWidthFraction={roiWidth}
+            roiHeightFraction={roiHeight}
+''')
+          old = '''            <View pointerEvents="none" style={styles.reticleWrap}>
+              <View style={[
+                styles.scanGuide,
+                reading?.componentTouchesGuide && styles.scanGuideWarning
+              ]}>'''
+          new = '''            <View pointerEvents="box-none" style={styles.reticleWrap}>
+              <View style={[
+                styles.scanGuide,
+                { width: `${Math.round(roiWidth * 100)}%`, height: `${Math.round(roiHeight * 100)}%` },
+                reading?.componentTouchesGuide && styles.scanGuideWarning
+              ]}>'''
+          s = s.replace(old, new)
+          s = s.replace('''                <Crosshair size={31} color="#58E6B1" strokeWidth={1.7} />
+              </View>
+              <Text style={styles.reticleLabel}>{guideLabel}</Text>''', '''                <Crosshair size={31} color="#58E6B1" strokeWidth={1.7} />
+                <View
+                  accessibilityLabel="Resize measurement frame"
+                  accessibilityRole="adjustable"
+                  {...resizePan.panHandlers}
+                  style={styles.resizeHandle}
+                >
+                  <View style={styles.resizeHandleDot} />
+                </View>
+              </View>
+              <Text style={styles.reticleLabel}>{guideLabel}</Text>
+              <Text style={styles.resizeHint}>Drag the bottom-right handle to wrap the frame around one item.</Text>''')
+          marker = '''  scanGuideWarning: {
+    borderColor: '#F0CA6B'
+  },'''
+          replacement = '''  scanGuideWarning: {
+    borderColor: '#F0CA6B'
+  },
+  resizeHandle: {
+    position: 'absolute',
+    right: -18,
+    bottom: -18,
+    width: 48,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  resizeHandleDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#58E6B1',
+    borderWidth: 3,
+    borderColor: '#07110E'
+  },
+  resizeHint: {
+    marginTop: 8,
+    color: 'rgba(246,248,247,0.78)',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center'
+  },'''
+          if marker not in s:
+            raise SystemExit('scanGuideWarning style marker not found')
+          s = s.replace(marker, replacement)
+          ui.write_text(s)
+          PY
+      - name: Verify patch
+        run: |
+          grep -q 'roiWidthFraction' modules/portion-scanner/src/PortionScanner.ts
+          grep -q 'setRoiWidthFraction' modules/portion-scanner/android/src/main/java/expo/modules/portionscanner/PortionDepthView.kt
+          grep -q 'Resize measurement frame' src/PortionScannerEntry.tsx
+          npm ci
+          npm run typecheck
+      - name: Commit scanner changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add modules/portion-scanner src/PortionScannerEntry.tsx
+          git commit -m 'Add adjustable ARCore scan region'
+          git push origin main
