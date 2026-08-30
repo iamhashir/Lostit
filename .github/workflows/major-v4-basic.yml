@@ -1,0 +1,42 @@
+name: Apply V4 basic scanner and navigation
+
+on:
+  push:
+    paths:
+      - 'scripts/patch-major-v4-basic.py'
+      - '.github/workflows/major-v4-basic.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply V4 patch
+        run: python scripts/patch-major-v4-basic.py
+      - name: Verify changes
+        run: |
+          grep -q 'label="Home"' App.tsx
+          grep -q 'Add/Scan' App.tsx
+          grep -q 'function MealsScreen' App.tsx
+          grep -q 'rawVolumeMl > 0' src/PortionScannerEntry.tsx
+          grep -q 'BASIC MODE' modules/portion-scanner/android/src/main/java/expo/modules/portionscanner/PortionDepthView.kt
+          npm install --no-audit --no-fund
+          npm run typecheck
+      - name: Commit V4
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add App.tsx src/PortionScannerEntry.tsx modules/portion-scanner/android/src/main/java/expo/modules/portionscanner/PortionDepthView.kt
+          git commit -m 'Simplify scanner and reorganize navigation'
+          git push origin main
