@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'scripts/patch-major-v4-basic.py'
+      - 'scripts/patch-major-v4-fix.py'
       - '.github/workflows/major-v4-basic.yml'
 
 permissions:
@@ -23,13 +24,15 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply V4 patch
-        run: python scripts/patch-major-v4-basic.py
+        run: |
+          python scripts/patch-major-v4-basic.py
+          python scripts/patch-major-v4-fix.py
       - name: Verify changes
         run: |
           grep -q 'label="Home"' App.tsx
           grep -q 'Add/Scan' App.tsx
           grep -q 'function MealsScreen' App.tsx
-          grep -q 'rawVolumeMl > 0' src/PortionScannerEntry.tsx
+          grep -q 'rawVolumeMl ?? 0' src/PortionScannerEntry.tsx
           grep -q 'BASIC MODE' modules/portion-scanner/android/src/main/java/expo/modules/portionscanner/PortionDepthView.kt
           npm install --no-audit --no-fund
           npm run typecheck
