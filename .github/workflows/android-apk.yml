@@ -39,12 +39,16 @@ jobs:
       - name: Type-check app
         run: npm run typecheck
 
-      - name: Verify scanner V3 adjustable ROI source
+      - name: Verify scanner V4 basic source
         run: |
+          grep -q 'label="Home"' App.tsx
+          grep -q 'Add/Scan' App.tsx
+          grep -q 'function MealsScreen' App.tsx
+          grep -q 'BASIC' src/PortionScannerEntry.tsx
+          grep -q 'rawVolumeMl ?? 0' src/PortionScannerEntry.tsx
+          grep -q 'BASIC MODE' modules/portion-scanner/android/src/main/java/expo/modules/portionscanner/PortionDepthView.kt
           grep -q "roiWidthFraction" modules/portion-scanner/src/PortionScanner.ts
           grep -q "setRoiWidthFraction" modules/portion-scanner/android/src/main/java/expo/modules/portionscanner/PortionDepthView.kt
-          grep -q "roiHeightFraction" modules/portion-scanner/android/src/main/java/expo/modules/portionscanner/PortionScannerModule.kt
-          grep -q "Resize measurement frame" src/PortionScannerEntry.tsx
 
       - name: Generate optimized Android project
         env:
@@ -78,7 +82,7 @@ jobs:
         run: |
           gh release delete latest --cleanup-tag --yes 2>/dev/null || true
           gh release create latest MealTrack-arm64-release.apk \
-            --title "MealTrack Scanner V3 Android APK" \
-            --notes "Direct ARM64 APK from commit ${GITHUB_SHA}. Scanner V3 includes the adjustable ARCore measurement ROI and native framing integration." \
+            --title "MealTrack V4 Basic Scanner APK" \
+            --notes "Direct ARM64 APK from commit ${GITHUB_SHA}. V4 reorganizes Home/Add-Scan/Meals and runs the ARCore scanner in basic raw-depth mode without framing, stability or confidence gates blocking capture." \
             --prerelease \
             --target "${GITHUB_SHA}"
