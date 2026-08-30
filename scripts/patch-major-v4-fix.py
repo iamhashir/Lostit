@@ -5,6 +5,8 @@ path = Path('src/PortionScannerEntry.tsx')
 s = path.read_text()
 
 s = s.replace('reading && reading.rawVolumeMl > 0', 'reading && (reading.rawVolumeMl ?? 0) > 0')
+s = s.replace('reading?.rawVolumeMl > 0', '(reading?.rawVolumeMl ?? 0) > 0')
+s = s.replace('reading.rawVolumeMl > 0', '(reading.rawVolumeMl ?? 0) > 0')
 s = s.replace('Math.round(reading.rawVolumeMl)', 'Math.round(reading.rawVolumeMl ?? 0)')
 
 old_status = '''                <View style={[
