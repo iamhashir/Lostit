@@ -322,7 +322,7 @@ function MealTrackTabs() {
     >
       <Tab.Screen name="Today">
         {({ navigation }) => (
-          <TodayScreen meals={meals} onHistory={() => navigation.navigate('History')} />
+          <TodayScreen meals={meals} onHistory={() => navigation.navigate('Foods')} />
         )}
       </Tab.Screen>
       <Tab.Screen name="AddMeal">
@@ -337,7 +337,7 @@ function MealTrackTabs() {
         )}
       </Tab.Screen>
       <Tab.Screen name="Foods">
-        {() => <FoodsScreen foods={allFoods} onAddCustom={addCustomFood} />}
+        {() => <MealsScreen meals={meals} onDelete={deleteMeal} />}
       </Tab.Screen>
       <Tab.Screen name="History">
         {({ navigation }) => (
@@ -365,14 +365,14 @@ function PremiumTabBar({ state, navigation }: BottomTabBarProps) {
     >
       <View style={styles.tabBarGlass}>
         <AnimatedTabButton
-          label="Today"
+          label="Home"
           Icon={Home}
           active={activeRoute === 'Today'}
           onPress={() => navigation.navigate('Today')}
         />
         <View style={styles.tabCenterSpacer} />
         <AnimatedTabButton
-          label="Foods"
+          label="Meals"
           Icon={LibraryBig}
           active={activeRoute === 'Foods'}
           onPress={() => navigation.navigate('Foods')}
@@ -457,7 +457,7 @@ function AnimatedAddButton({ active, onPress }: { active: boolean; onPress: () =
     <Pressable
       accessibilityRole="tab"
       accessibilityState={{ selected: active }}
-      accessibilityLabel="Add meal"
+      accessibilityLabel="Add or scan"
       hitSlop={10}
       onPress={onPress}
       style={styles.addTabHit}
@@ -466,7 +466,7 @@ function AnimatedAddButton({ active, onPress }: { active: boolean; onPress: () =
         <View style={[styles.addButton, active && styles.addButtonActive]}>
           <Plus size={27} strokeWidth={2.5} color="#06251B" />
         </View>
-        <Text style={[styles.addTabLabel, active && styles.addTabLabelActive]}>Add meal</Text>
+        <Text style={[styles.addTabLabel, active && styles.addTabLabelActive]}>Add/Scan</Text>
       </Animated.View>
     </Pressable>
   );
@@ -494,7 +494,7 @@ function TodayScreen({ meals, onHistory }: { meals: Meal[]; onHistory: () => voi
       >
         <ScreenHeader
           eyebrow="MealTrack"
-          title="Today"
+          title="Home"
           subtitle={dateLabel}
           action={
             <IconButton label="Meal history" onPress={onHistory}>
@@ -617,10 +617,28 @@ function AddMealScreen({ foods, onSave }: { foods: Food[]; onSave: (meal: Meal) 
           ]}
         >
           <ScreenHeader
-            eyebrow="Log meal"
-            title="What did you eat?"
-            subtitle="Select foods and enter the amount. Everything is calculated locally."
+            eyebrow="Meal workflow"
+            title="Add / Scan"
+            subtitle="Search for the food, then scan the portion or enter grams manually."
           />
+
+          <View style={styles.sectionHeader}>
+            <View>
+              <Text style={styles.sectionKicker}>SCAN</Text>
+              <Text style={styles.sectionTitle}>Live portion scanner</Text>
+            </View>
+          </View>
+          <PortionScannerEntry
+            foodName={selectedFood?.name ?? 'Food portion'}
+            onEstimateGrams={(value) => setGrams(String(Math.max(1, Math.round(value))))}
+          />
+
+          <View style={styles.sectionHeader}>
+            <View>
+              <Text style={styles.sectionKicker}>SEARCH & ADD</Text>
+              <Text style={styles.sectionTitle}>Build the meal</Text>
+            </View>
+          </View>
 
           <Text style={styles.fieldLabel}>Meal name</Text>
           <TextInput
@@ -631,7 +649,7 @@ function AddMealScreen({ foods, onSave }: { foods: Food[]; onSave: (meal: Meal) 
             placeholderTextColor={theme.muted2}
           />
 
-          <Text style={styles.fieldLabel}>Find food</Text>
+          <Text style={styles.fieldLabel}>Search food</Text>
           <View style={styles.searchInputWrap}>
             <Search size={18} color={theme.muted2} strokeWidth={2} />
             <TextInput
@@ -708,7 +726,6 @@ function AddMealScreen({ foods, onSave }: { foods: Food[]; onSave: (meal: Meal) 
                 </Text>
               </View>
 
-              <PortionScannerEntry foodName={selectedFood.name} />
 
               <PrimaryButton label="Add to meal" onPress={addSelected} />
             </View>
@@ -837,155 +854,95 @@ function HistoryScreen({
   );
 }
 
-function FoodsScreen({ foods, onAddCustom }: { foods: Food[]; onAddCustom: (food: Food) => void }) {
+function MealsScreen({ meals, onDelete }: { meals: Meal[]; onDelete: (id: string) => void }) {
   const insets = useSafeAreaInsets();
-  const [search, setSearch] = useState('');
-  const [showForm, setShowForm] = useState(false);
-  const [name, setName] = useState('');
-  const [calories, setCalories] = useState('');
-  const [protein, setProtein] = useState('');
-  const [carbs, setCarbs] = useState('');
-  const [fat, setFat] = useState('');
-  const [fiber, setFiber] = useState('');
-  const [sugar, setSugar] = useState('');
-  const [sodium, setSodium] = useState('');
-
-  const query = search.trim().toLowerCase();
-  const results = foods.filter(
-    (food) => !query || food.name.toLowerCase().includes(query) || food.category.toLowerCase().includes(query)
+  const sorted = [...meals].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const recent = sorted.filter((meal) => new Date(meal.createdAt).getTime() >= cutoff);
+  const loggedDays = Math.max(1, new Set(recent.map((meal) => localDateKey(meal.createdAt))).size);
+  const recentTotal = totalForMeals(recent);
+  const forecast: Nutrition = {
+    calories: recentTotal.calories / loggedDays,
+    protein: recentTotal.protein / loggedDays,
+    carbs: recentTotal.carbs / loggedDays,
+    fat: recentTotal.fat / loggedDays,
+    fiber: recentTotal.fiber / loggedDays,
+    sugar: recentTotal.sugar / loggedDays,
+    sodium: recentTotal.sodium / loggedDays
+  };
 
-  const saveCustom = () => {
-    if (!name.trim()) {
-      Alert.alert('Food name required', 'Enter the name shown on the package or your own description.');
-      return;
-    }
-
-    onAddCustom({
-      id: id('custom'),
-      name: name.trim(),
-      category: 'Custom',
-      source: 'custom',
-      nutrients: n(
-        numberOrZero(calories),
-        numberOrZero(protein),
-        numberOrZero(carbs),
-        numberOrZero(fat),
-        numberOrZero(fiber),
-        numberOrZero(sugar),
-        numberOrZero(sodium)
-      )
-    });
-
-    setName('');
-    setCalories('');
-    setProtein('');
-    setCarbs('');
-    setFat('');
-    setFiber('');
-    setSugar('');
-    setSodium('');
-    setShowForm(false);
-    Alert.alert('Food saved', 'Your custom food is now available when you log a meal.');
+  const confirmDelete = (meal: Meal) => {
+    Alert.alert('Delete meal?', `${meal.name} will be removed from your meal log.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => onDelete(meal.id) }
+    ]);
   };
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={[
-            styles.scrollContent,
-            { paddingBottom: 118 + insets.bottom }
-          ]}
-        >
-          <ScreenHeader
-            eyebrow="Library"
-            title="Foods"
-            subtitle={`${foods.length} foods available`}
-            action={
-              <Pressable
-                style={[styles.headerPill, showForm && styles.headerPillActive]}
-                onPress={() => setShowForm((value) => !value)}
-              >
-                {showForm ? (
-                  <X size={16} color={theme.text} strokeWidth={2.1} />
-                ) : (
-                  <Plus size={16} color={theme.green} strokeWidth={2.3} />
-                )}
-                <Text style={[styles.headerPillText, showForm && styles.headerPillTextActive]}>
-                  {showForm ? 'Close' : 'Custom'}
-                </Text>
-              </Pressable>
-            }
-          />
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: 118 + insets.bottom }
+        ]}
+      >
+        <ScreenHeader
+          eyebrow="Meal log"
+          title="Meals"
+          subtitle={`${sorted.length} saved meal${sorted.length === 1 ? '' : 's'} · history and recent trend`}
+        />
 
-          {showForm ? (
-            <View style={styles.editorCard}>
-              <Text style={styles.editorTitle}>Custom food</Text>
-              <Text style={styles.muted}>Enter nutrition values per 100 g from the package label.</Text>
+        <View style={styles.heroCard}>
+          <Text style={styles.heroEyebrow}>Next-day forecast</Text>
+          <View style={styles.heroValueRow}>
+            <Text style={styles.heroNumber}>{Math.round(forecast.calories)}</Text>
+            <Text style={styles.heroUnit}>kcal</Text>
+          </View>
+          <Text style={styles.heroCaption}>
+            {recent.length === 0
+              ? 'Log meals to build a recent-day forecast.'
+              : `Based on ${loggedDays} logged day${loggedDays === 1 ? '' : 's'} from the last 7 days.`}
+          </Text>
+          <View style={styles.heroDivider} />
+          <MacroGrid nutrition={forecast} />
+        </View>
 
-              <Text style={styles.fieldLabel}>Food name</Text>
-              <TextInput
-                style={styles.input}
-                value={name}
-                onChangeText={setName}
-                placeholder="Example: My granola"
-                placeholderTextColor={theme.muted2}
-              />
+        <View style={styles.sectionHeader}>
+          <View>
+            <Text style={styles.sectionKicker}>HISTORY</Text>
+            <Text style={styles.sectionTitle}>All meals</Text>
+          </View>
+        </View>
 
-              <View style={styles.twoCol}>
-                <MiniInput label="Calories" value={calories} onChange={setCalories} />
-                <MiniInput label="Protein g" value={protein} onChange={setProtein} />
-                <MiniInput label="Carbs g" value={carbs} onChange={setCarbs} />
-                <MiniInput label="Fat g" value={fat} onChange={setFat} />
-                <MiniInput label="Fiber g" value={fiber} onChange={setFiber} />
-                <MiniInput label="Sugar g" value={sugar} onChange={setSugar} />
-                <MiniInput label="Sodium mg" value={sodium} onChange={setSodium} />
-              </View>
-
-              <PrimaryButton label="Save custom food" onPress={saveCustom} />
+        {sorted.length === 0 ? (
+          <View style={styles.emptyState}>
+            <View style={styles.emptyIcon}>
+              <Clock3 size={18} color={theme.green} strokeWidth={2.2} />
             </View>
-          ) : null}
-
-          <View style={styles.searchInputWrap}>
-            <Search size={18} color={theme.muted2} strokeWidth={2} />
-            <TextInput
-              style={styles.searchInput}
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search food or category"
-              placeholderTextColor={theme.muted2}
-              autoCorrect={false}
-            />
-            {search ? (
-              <Pressable onPress={() => setSearch('')} hitSlop={8}>
-                <X size={17} color={theme.muted2} strokeWidth={2} />
+            <View style={styles.emptyCopy}>
+              <Text style={styles.emptyTitle}>No meals yet</Text>
+              <Text style={styles.muted}>Meals saved from Add/Scan will appear here.</Text>
+            </View>
+          </View>
+        ) : (
+          sorted.map((meal) => (
+            <View key={meal.id} style={styles.historyBlock}>
+              <MealCard meal={meal} showDate />
+              <Pressable
+                style={styles.deleteInline}
+                onPress={() => confirmDelete(meal)}
+                hitSlop={8}
+              >
+                <Trash2 size={14} color={theme.danger} strokeWidth={2} />
+                <Text style={styles.deleteInlineText}>Delete</Text>
               </Pressable>
-            ) : null}
-          </View>
-
-          <View style={styles.libraryList}>
-            {results.map((food, index) => (
-              <View key={food.id} style={[styles.libraryRow, index > 0 && styles.libraryRowBorder]}>
-                <View style={styles.libraryRowTop}>
-                  <View style={styles.libraryCopy}>
-                    <Text style={styles.foodName}>{food.name}</Text>
-                    <Text style={styles.foodMeta}>
-                      {food.category}{food.source === 'custom' ? ' · Custom' : ''} · per 100 g
-                    </Text>
-                  </View>
-                  <Text style={styles.libraryCalories}>{Math.round(food.nutrients.calories)} kcal</Text>
-                </View>
-                <Text style={styles.libraryMacros}>
-                  P {round(food.nutrients.protein)} · C {round(food.nutrients.carbs)} · F {round(food.nutrients.fat)} · Fiber {round(food.nutrients.fiber)} g · Sugar {round(food.nutrients.sugar)} g · Sodium {Math.round(food.nutrients.sodium)} mg
-                </Text>
-              </View>
-            ))}
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+            </View>
+          ))
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }

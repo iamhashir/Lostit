@@ -1,4 +1,4 @@
-import { Camera, Check, Crosshair, Gauge, Ruler, X } from 'lucide-react-native';
+import { Camera, Crosshair, Gauge, Ruler, X } from 'lucide-react-native';
 import React, { useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -96,11 +96,10 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
   });
 
   const density = useMemo(() => densityForFood(foodName), [foodName]);
-  const assessment = useMemo(() => assessScan(reading), [reading]);
-  const liveGrams = reading && assessment.geometryValid ? estimateGrams(reading, density) : 0;
+  const liveGrams = reading ? estimateGrams(reading, density) : 0;
   const capturedGrams = capturedReading ? estimateGrams(capturedReading, density) : 0;
   const ready = support?.depthSupported === true;
-  const canCapture = Boolean(reading && assessment.ready);
+  const canCapture = Boolean(reading && (reading.rawVolumeMl ?? 0) > 0);
 
   const openScanner = async (mode: ScanMode) => {
     if (Platform.OS !== 'android') {
@@ -176,8 +175,7 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
     ? 'ONE FOOD PORTION · FLAT BASE AROUND IT'
     : 'ONE OBJECT · FLAT HARD BASE AROUND IT';
 
-  const showMeasurement = Boolean(reading && assessment.geometryValid && reading.sampleWindow >= 3);
-  const quality = estimateQuality(reading, assessment);
+  const showMeasurement = Boolean(reading && (reading.rawVolumeMl ?? 0) > 0);
 
   return (
     <>
@@ -188,13 +186,13 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
           </View>
           <View style={styles.copy}>
             <View style={styles.titleRow}>
-              <Text style={styles.title}>Depth measurement</Text>
+              <Text style={styles.title}>Live scanner</Text>
               <View style={styles.betaPill}>
-                <Text style={styles.betaText}>ROUND 2</Text>
+                <Text style={styles.betaText}>BASIC</Text>
               </View>
             </View>
             <Text style={styles.description}>
-              The scanner now rejects bad distance, uneven bases and unstable frames before showing a usable result.
+              Basic mode shows raw depth measurements immediately. No framing, stability or confidence gate blocks capture.
             </Text>
           </View>
         </View>
@@ -313,24 +311,19 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
 
             <View style={styles.hud}>
               <View style={styles.guidanceHeader}>
-                <Text style={styles.guidanceHeadline}>{assessment.headline}</Text>
-                <Text style={styles.guidanceText}>{assessment.instruction}</Text>
-              </View>
-
-              <View style={styles.gatesRow}>
-                {assessment.gates.map((gate) => (
-                  <View key={gate.key} style={[styles.gate, gate.ok && styles.gateOk]}>
-                    {gate.ok ? <Check size={11} color="#55E4AF" strokeWidth={3} /> : <View style={styles.gateDot} />}
-                    <Text style={[styles.gateText, gate.ok && styles.gateTextOk]}>{gate.label}</Text>
-                  </View>
-                ))}
+                <Text style={styles.guidanceHeadline}>
+                  {(reading?.rawVolumeMl ?? 0) > 0 ? 'Depth detected' : 'Find one item'}
+                </Text>
+                <Text style={styles.guidanceText}>
+                  Raw mode is active. Keep the item inside the adjustable frame and capture whenever a volume appears.
+                </Text>
               </View>
 
               <View style={styles.metricGrid}>
                 <ScannerMetric
                   icon={<Gauge size={15} color="#55E4AF" strokeWidth={2.2} />}
                   label={scanMode === 'food' ? 'VOLUME' : 'OUTER VOLUME'}
-                  value={showMeasurement && reading ? `${Math.round(reading.estimatedVolumeMl)} ml` : '—'}
+                  value={showMeasurement && reading ? `${Math.round(reading.rawVolumeMl ?? 0)} ml` : '—'}
                 />
                 <ScannerMetric
                   icon={<Ruler size={15} color="#55E4AF" strokeWidth={2.2} />}
@@ -341,13 +334,12 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
                   alignRight
                 />
                 <ScannerMetric
-                  label="STABILITY"
-                  value={stabilityLabel(reading)}
+                  label="DISTANCE"
+                  value={reading?.distanceCm ? `${Math.round(reading.distanceCm)} cm` : '—'}
                 />
                 <ScannerMetric
-                  label="QUALITY"
-                  value={quality.label}
-                  valueColor={quality.color}
+                  label="SAMPLES"
+                  value={reading ? String(reading.sampleWindow) : '0'}
                   alignRight
                 />
               </View>
@@ -355,11 +347,11 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
               <View style={styles.statusRow}>
                 <View style={[
                   styles.statusDot,
-                  assessment.ready && styles.statusDotReady,
-                  !assessment.ready && reading && styles.statusDotWarning
+                  canCapture && styles.statusDotReady,
+                  !canCapture && reading && styles.statusDotWarning
                 ]} />
                 <Text style={styles.scannerStatus}>
-                  {assessment.ready ? 'Measurement ready to capture.' : scannerStatus.message}
+                  {(reading?.rawVolumeMl ?? 0) > 0 ? 'Live raw measurement available.' : scannerStatus.message}
                 </Text>
               </View>
 
@@ -370,7 +362,7 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
                   </Text>
                   <Text style={styles.diagnosticText}>
                     stability {Math.round(reading.stability * 100)}% · confidence {Math.round(reading.estimateConfidence * 100)}%
-                    {__DEV__ ? ` · raw ${Math.round(reading.rawVolumeMl)} ml` : ''}
+                    {__DEV__ ? ` · raw ${Math.round(reading.rawVolumeMl ?? 0)} ml` : ''}
                   </Text>
                 </View>
               ) : null}
@@ -402,7 +394,7 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
                     </Text>
                   </View>
                   <Text style={styles.captureResultHint}>
-                    Validated against distance, base quality, framing and temporal stability before capture.
+                    Basic raw reading. Advanced validation is intentionally disabled for now.
                   </Text>
                   {scanMode === 'food' ? (
                     <Pressable
@@ -432,7 +424,7 @@ export function PortionScannerEntry({ foodName, onEstimateGrams }: Props) {
               >
                 <Crosshair size={18} color="#05251B" strokeWidth={2.4} />
                 <Text style={styles.captureButtonText}>
-                  {canCapture ? 'Capture measurement' : assessment.headline}
+                  {canCapture ? 'Capture reading' : 'Waiting for depth'}
                 </Text>
               </Pressable>
             </View>
@@ -547,8 +539,10 @@ function ScannerMetric({
 }
 
 function estimateGrams(reading: PortionDepthReading, density: DensityEstimate) {
-  if (reading.estimatedVolumeMl < 5 || reading.estimateConfidence < 0.35) return 0;
-  return reading.estimatedVolumeMl * density.gramsPerMl;
+  const rawVolumeMl = reading.rawVolumeMl ?? 0;
+  const volumeMl = rawVolumeMl > 0 ? rawVolumeMl : reading.estimatedVolumeMl;
+  if (volumeMl <= 0) return 0;
+  return volumeMl * density.gramsPerMl;
 }
 
 function estimateQuality(reading: PortionDepthReading | null, assessment: ScanAssessment) {

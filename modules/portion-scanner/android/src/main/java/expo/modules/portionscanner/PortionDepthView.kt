@@ -184,18 +184,13 @@ class PortionDepthView(
       val framingOk = !estimate.touchesGuide &&
         !estimate.multipleObjects &&
         estimate.centerOffset <= MAX_CENTER_OFFSET
-      val geometryOk = hasDistance &&
-        distanceOk &&
-        baseOk &&
-        framingOk &&
-        estimate.volumeMl >= MIN_REPORTABLE_VOLUME_ML
+      // BASIC MODE: geometry exists once the depth pipeline can produce a positive object volume.
+      // Distance, framing, residual, confidence and stability stay diagnostic only.
+      val geometryOk = estimate.volumeMl > 0.5 && estimate.heightMm > 0.0
 
       val freshDepth = rawDepth?.let { frame.timestamp == it.timestamp } ?: true
       val stabilized = stabilize(estimate, geometryOk, freshDepth)
-      val ready = geometryOk &&
-        stabilized.sampleWindow >= MIN_CAPTURE_FRAMES &&
-        stabilized.stability >= MIN_REPORTABLE_STABILITY &&
-        stabilized.confidence >= MIN_REPORTABLE_CONFIDENCE
+      val ready = geometryOk && stabilized.sampleWindow >= 1
 
       emitGuidance(surfaceDistance, estimate, stabilized, baseOk, framingOk, ready)
 
@@ -256,44 +251,13 @@ class PortionDepthView(
     framingOk: Boolean,
     ready: Boolean
   ) {
-    val distanceMm = surfaceDistance.distanceMm
     when {
-      distanceMm <= 0.0 -> {
-        emitStatus(
-          "surface",
-          "Searching for the flat base. Keep one item centered and move slowly so ARCore can lock onto the table."
-        )
-      }
-      distanceMm < MIN_RECOMMENDED_DISTANCE_MM -> {
-        emitStatus("distance", "Too close. Move back to about 50–75 cm.")
-      }
-      distanceMm > MAX_RECOMMENDED_DISTANCE_MM -> {
-        emitStatus("distance", "Too far. Move closer to about 50–75 cm.")
-      }
-      !baseOk -> {
-        emitStatus("base", "Base is not flat enough. Use a hard matte table with visible texture around the item.")
-      }
-      estimate.multipleObjects -> {
-        emitStatus("multiple", "More than one raised object is inside the guide. Leave only one item.")
-      }
-      estimate.centerOffset > MAX_CENTER_OFFSET -> {
-        emitStatus("center", "Center the item on the crosshair with empty base visible around it.")
-      }
-      estimate.touchesGuide -> {
-        emitStatus("reframe", "The item reaches the guide edge. Move back slightly and keep it fully inside.")
-      }
-      !framingOk -> {
-        emitStatus("reframe", "Keep one item centered with flat base visible around every side.")
-      }
-      stabilized.sampleWindow < MIN_CAPTURE_FRAMES ->
-        emitStatus(
-          "tracking",
-          "Good geometry. Hold steady while the measurement settles (${stabilized.sampleWindow}/$MIN_CAPTURE_FRAMES)."
-        )
-      stabilized.stability < MIN_REPORTABLE_STABILITY ->
-        emitStatus("tracking", "Hold the phone still. Waiting for the volume to stabilize.")
-      ready -> emitStatus("measuring", "Measurement is stable and ready to capture.")
-      else -> emitStatus("tracking", "Move slightly side-to-side, then hold still to improve depth confidence.")
+      estimate.volumeMl <= 0.0 ->
+        emitStatus("move", "Move slowly and keep one item inside the adjustable frame.")
+      ready ->
+        emitStatus("measuring", "Raw depth measurement is live. Capture whenever the value looks usable.")
+      else ->
+        emitStatus("tracking", "Depth detected. Hold briefly for a cleaner reading.")
     }
   }
 
@@ -936,7 +900,7 @@ class PortionDepthView(
     geometryOk: Boolean,
     freshDepth: Boolean
   ): StabilizedEstimate {
-    if (!geometryOk || raw.confidence < MIN_HISTORY_CONFIDENCE) {
+    if (!geometryOk) {
       invalidFrameStreak += 1
       if (invalidFrameStreak >= MAX_INVALID_FRAME_STREAK) {
         history.clear()
