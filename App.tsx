@@ -14,7 +14,7 @@ import {
   X,
   type LucideIcon
 } from 'lucide-react-native';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -29,6 +29,7 @@ import {
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
+  cancelAnimation,
   interpolate,
   useAnimatedStyle,
   useSharedValue,
@@ -355,6 +356,16 @@ function MealTrackTabs() {
 function PremiumTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const activeRoute = state.routes[state.index]?.name;
+  const navigationLocked = useRef(false);
+
+  const safeNavigate = (routeName: 'Today' | 'AddMeal' | 'Foods') => {
+    if (activeRoute === routeName || navigationLocked.current) return;
+    navigationLocked.current = true;
+    navigation.navigate(routeName);
+    setTimeout(() => {
+      navigationLocked.current = false;
+    }, 220);
+  };
 
   if (activeRoute === 'History') return null;
 
@@ -368,20 +379,20 @@ function PremiumTabBar({ state, navigation }: BottomTabBarProps) {
           label="Home"
           Icon={Home}
           active={activeRoute === 'Today'}
-          onPress={() => navigation.navigate('Today')}
+          onPress={() => safeNavigate('Today')}
         />
         <View style={styles.tabCenterSpacer} />
         <AnimatedTabButton
           label="Meals"
           Icon={LibraryBig}
           active={activeRoute === 'Foods'}
-          onPress={() => navigation.navigate('Foods')}
+          onPress={() => safeNavigate('Foods')}
         />
       </View>
 
       <AnimatedAddButton
         active={activeRoute === 'AddMeal'}
-        onPress={() => navigation.navigate('AddMeal')}
+        onPress={() => safeNavigate('AddMeal')}
       />
     </View>
   );
@@ -399,16 +410,32 @@ function AnimatedTabButton({
   onPress: () => void;
 }) {
   const progress = useSharedValue(active ? 1 : 0);
+  const pressScale = useSharedValue(1);
 
   useEffect(() => {
-    progress.value = withTiming(active ? 1 : 0, { duration: 180 });
+    cancelAnimation(progress);
+    progress.value = withTiming(active ? 1 : 0, { duration: 150 });
   }, [active, progress]);
+
+  const pressIn = () => {
+    cancelAnimation(pressScale);
+    pressScale.value = withTiming(0.90, { duration: 70 });
+  };
+
+  const pressOut = () => {
+    cancelAnimation(pressScale);
+    pressScale.value = withSpring(1, {
+      damping: 17,
+      stiffness: 330,
+      mass: 0.45
+    });
+  };
 
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: interpolate(progress.value, [0, 1], [0.72, 1]),
     transform: [
       { translateY: interpolate(progress.value, [0, 1], [0, -2]) },
-      { scale: interpolate(progress.value, [0, 1], [1, 1.03]) }
+      { scale: interpolate(progress.value, [0, 1], [1, 1.03]) * pressScale.value }
     ]
   }));
 
@@ -418,6 +445,8 @@ function AnimatedTabButton({
       accessibilityState={{ selected: active }}
       accessibilityLabel={label}
       hitSlop={8}
+      onPressIn={pressIn}
+      onPressOut={pressOut}
       onPress={onPress}
       style={styles.tabHit}
     >
@@ -437,8 +466,10 @@ function AnimatedTabButton({
 
 function AnimatedAddButton({ active, onPress }: { active: boolean; onPress: () => void }) {
   const progress = useSharedValue(active ? 1 : 0);
+  const pressScale = useSharedValue(1);
 
   useEffect(() => {
+    cancelAnimation(progress);
     progress.value = withSpring(active ? 1 : 0, {
       damping: 18,
       stiffness: 220,
@@ -446,10 +477,24 @@ function AnimatedAddButton({ active, onPress }: { active: boolean; onPress: () =
     });
   }, [active, progress]);
 
+  const pressIn = () => {
+    cancelAnimation(pressScale);
+    pressScale.value = withTiming(0.90, { duration: 70 });
+  };
+
+  const pressOut = () => {
+    cancelAnimation(pressScale);
+    pressScale.value = withSpring(1, {
+      damping: 17,
+      stiffness: 330,
+      mass: 0.45
+    });
+  };
+
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
       { translateY: interpolate(progress.value, [0, 1], [0, -3]) },
-      { scale: interpolate(progress.value, [0, 1], [1, 1.045]) }
+      { scale: interpolate(progress.value, [0, 1], [1, 1.045]) * pressScale.value }
     ]
   }));
 
@@ -459,6 +504,8 @@ function AnimatedAddButton({ active, onPress }: { active: boolean; onPress: () =
       accessibilityState={{ selected: active }}
       accessibilityLabel="Add or scan"
       hitSlop={10}
+      onPressIn={pressIn}
+      onPressOut={pressOut}
       onPress={onPress}
       style={styles.addTabHit}
     >
